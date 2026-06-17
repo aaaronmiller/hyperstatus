@@ -182,6 +182,7 @@ backup_pi() {
     log_success "Backed up pi/extensions/hyperstatus/"
   fi
   if [ -d "${pi_dir}/agent/extensions/hyperstatus" ]; then
+    mkdir -p "${BACKUP_DIR}/pi/agent/extensions/"
     cp -r "${pi_dir}/agent/extensions/hyperstatus" "${BACKUP_DIR}/pi/agent/extensions/"
     log_success "Backed up pi/agent/extensions/hyperstatus/"
   fi
