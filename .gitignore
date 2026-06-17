@@ -1,0 +1,61 @@
+# Logs and backups
+*.log
+backups/
+setup.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Mockups and generated files
+mockups/*.png
+mockups/*.pdf
+generated_mockups/
+*.mockup.pdf
+
+# Local config overrides
+*.local.json
+*.local.yaml
+*.local.toml

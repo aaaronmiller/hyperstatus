@@ -1,0 +1,65 @@
+# ============================================================================
+#  HYPERSTATUS v2.1 — Codex CLI Status Bar Configuration
+#  Codex uses a built-in enum of status line items in config.toml
+#  Install: Copy to ~/.codex/config.toml (merge with existing)
+#
+#  ⚠️  CODEX LIMITATIONS (as of June 2026):
+#  - NO custom shell scripts (issues #17827, #16921 request this)
+#  - NO Nerd Font icons
+#  - NO custom colors or Powerline rendering
+#  - NO multi-line support (issue #21653)
+#  - ONLY the fixed enum of built-in items listed below
+#
+#  MISSING FROM TOP 13 vs. Claude Code version:
+#    #4  Session Cost — ❌ NOT available in built-in enum
+#    #6  Session Duration — ❌ NOT available in built-in enum
+#    #9  Cache Hit Rate — ❌ NOT available in built-in enum
+#    #10 Git Status (staged/unstaged/untracked) — ❌ NOT available
+#    #11 Compression Count — ❌ NOT available
+#    #12 Model Latency / tokens per second — ❌ NOT available
+#    #13 Background Tasks — ❌ NOT available
+#
+#  WORKAROUND: Use the companion codex-wrapper.sh script below to launch
+#  Codex inside a tmux session that renders a full-featured status bar
+#  alongside the Codex TUI. See codex-wrapper.sh for details.
+# ============================================================================
+
+# Core Codex configuration
+model = "o4-mini"
+sandbox = true
+
+[tui]
+# Status line items — MAXIMIZED for what Codex supports
+# Available enum: model, model-with-reasoning, model-name, current-dir,
+#   project-root, git-branch, context-used, context-remaining,
+#   context-window-size, used-tokens, total-output-tokens,
+#   five-hour-limit, weekly-limit, session-id, codex-version
+#
+# Coverage of top 13 features:
+#   #1  Context Window %   → "context-used"        ✅
+#   #2  Current Model      → "model-with-reasoning" ✅
+#   #3  Token Count        → "used-tokens"          ✅
+#   #4  Session Cost       → ❌ IMPOSSIBLE          (no built-in item)
+#   #5  Git Branch         → "git-branch"           ✅
+#   #6  Session Duration   → ❌ IMPOSSIBLE          (no built-in item)
+#   #7  Rate Limits        → "five-hour-limit" +    ✅
+#                          → "weekly-limit"
+#   #8  Working Directory  → "current-dir"          ✅
+#   #9  Cache Hit Rate     → ❌ IMPOSSIBLE          (no built-in item)
+#   #10 Git Status         → ❌ IMPOSSIBLE          (no built-in item)
+#   #11 Compression Count  → ❌ IMPOSSIBLE          (no built-in item)
+#   #12 Model Latency      → ❌ IMPOSSIBLE          (no built-in item)
+#   #13 Background Tasks   → ❌ IMPOSSIBLE          (no built-in item)
+
+status_line = [
+  "model-with-reasoning",
+  "current-dir",
+  "git-branch",
+  "context-used",
+  "context-remaining",
+  "context-window-size",
+  "used-tokens",
+  "total-output-tokens",
+  "five-hour-limit",
+  "weekly-limit",
+]

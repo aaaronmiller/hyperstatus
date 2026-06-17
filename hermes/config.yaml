@@ -1,0 +1,145 @@
+# ============================================================================
+#  HYPERSTATUS v2.1 — Hermes Agent Status Bar Configuration
+#  Hermes uses a YAML config with opt-in status bar via gateway settings
+#  Install: Merge with ~/.hermes/config.yaml
+#
+#  IMPORTANT: Hermes natively supports model, context%, tokens, cost,
+#  duration, compression count, bg tasks, and YOLO badge. For the FULL
+#  feature set (git branch, git status, cache %, rate limits, worktree,
+#  latency, lines changed), this config ALSO sets up a companion shell
+#  script (statusline.sh) that reads HERMES_* env vars exported by the
+#  gateway. This achieves feature parity with the Claude Code version.
+# ============================================================================
+
+# Gateway configuration
+gateway:
+  status_bar: true
+  status_bar_style: "powerline"
+  
+  # Environment variable export for statusline.sh
+  # The gateway exports these so the shell script can read them
+  export_env:
+    - HERMES_MODEL
+    - HERMES_CONTEXT_PCT
+    - HERMES_CONTEXT_SIZE
+    - HERMES_INPUT_TOKENS
+    - HERMES_OUTPUT_TOKENS
+    - HERMES_CACHE_READ
+    - HERMES_CACHE_CREATE
+    - HERMES_SESSION_COST
+    - HERMES_DURATION_MS
+    - HERMES_API_DURATION_MS
+    - HERMES_RATE5_PCT
+    - HERMES_RATE7_PCT
+    - HERMES_PROJECT_DIR
+    - HERMES_LINES_ADDED
+    - HERMES_LINES_REMOVED
+    - HERMES_COMPRESS_COUNT
+    - HERMES_BG_TASKS
+    - HERMES_EFFORT_LEVEL
+    - HERMES_THINKING_ENABLED
+    - HERMES_WORKTREE
+    - HERMES_YOLO_MODE
+    - HERMES_AUTO_ACCEPT
+    - HERMES_SESSION_START
+  
+  # Per-model pricing for cost calculation
+  pricing:
+    claude-sonnet-4-20250514:
+      input_per_million: 3.00
+      output_per_million: 15.00
+      cache_read_per_million: 0.30
+      cache_write_per_million: 3.75
+    claude-opus-4-20250514:
+      input_per_million: 15.00
+      output_per_million: 75.00
+      cache_read_per_million: 1.50
+      cache_write_per_million: 18.75
+    gpt-4o:
+      input_per_million: 2.50
+      output_per_million: 10.00
+    o4-mini:
+      input_per_million: 1.50
+      output_per_million: 6.00
+
+# Status bar layout — BOTH native AND script paths
+status_bar:
+  # --- Native gateway items (rendered by Hermes internally) ---
+  # These are the items Hermes renders natively when status_bar: true
+  items:
+    - model
+    - context_pct
+    - tokens
+    - cost
+    - duration
+    - compression
+    - bg_tasks
+    - yolo
+
+  # --- Full-featured shell script path ---
+  # When this is set, Hermes calls this script instead of native rendering
+  # The script reads HERMES_* env vars for data + runs git commands locally
+  # This gives the SAME feature set as the Claude Code version
+  command: "~/.hermes/statusline.sh"
+
+  # Color thresholds for context bar
+  context_thresholds:
+    green: 50
+    yellow: 80
+    orange: 95
+    red: 95
+
+  # Adaptive width modes
+  adaptive:
+    full: 76
+    compact: 52
+    minimal: 0
+
+  # Powerline separators (Nerd Font codepoints)
+  separators:
+    right: "\ue0b0"
+    right_thin: "\ue0b1"
+    left: "\ue0b2"
+    left_thin: "\ue0b3"
+
+  # Nerd Font icons (same set as Claude Code)
+  icons:
+    model: "\ue716"
+    context: "\uf6cf"
+    tokens: "\uf1c9"
+    cost: "\uf155"
+    duration: "\uf017"
+    compression: "\uf410"
+    bg_tasks: "\uf44e"
+    yolo: "\uf132"
+    cache: "\uf021"
+    git: "\ue725"
+    branch: "\uf418"
+    latency: "\uf9ee"
+    effort: "\uf58c"
+    dir: "\uf07b"
+    rate5: "\uf252"
+    rate7: "\uf254"
+    worktree: "\uf77a"
+    lines: "\uf1dc"
+    perm: "\uf132"
+    think: "\uf7b4"
+
+# Compression integration (headroom/RTK)
+compression:
+  headroom:
+    enabled: false
+    endpoint: "http://localhost:8787/metrics"
+    show_savings: true
+    show_ratio: true
+    
+  rtk:
+    enabled: false
+    metrics_file: "/tmp/rtk-metrics.json"
+    show_savings: true
+    show_per_command: false
+
+# Permission detection
+permissions:
+  yolo_env: "HERMES_YOLO_MODE"
+  auto_env: "HERMES_AUTO_ACCEPT"
