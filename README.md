@@ -1,10 +1,10 @@
-# HYPERSTATUS v3.0
+# HYPERSTATUS v3.2
 
 **Universal Powerline-Style Status Bar for Coding Agents**
 
-A comprehensive status bar solution providing real-time metrics, cost tracking, quota monitoring, and compression integration across multiple AI coding agents.
+A comprehensive status bar solution providing real-time metrics, cost tracking, quota monitoring, and compression integration across multiple AI coding agents — now with **2-line mode** for wide terminals.
 
-![HyperStatus](https://img.shields.io/badge/status-active-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-3.0-purple)
+![HyperStatus](https://img.shields.io/badge/status-active-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-3.2-purple)
 
 ---
 
@@ -12,6 +12,7 @@ A comprehensive status bar solution providing real-time metrics, cost tracking, 
 
 | Feature | Description |
 |---------|-------------|
+| **2-Line Mode** | Dual-row layout in terminals ≥80 cols — primary metrics on line 1, supplementary on line 2 |
 | **Context Window %** | Visual progress bar with color thresholds |
 | **Current Model** | Model name with reasoning indicator |
 | **Token Count** | Input/output/total tokens with formatting |
@@ -29,12 +30,13 @@ A comprehensive status bar solution providing real-time metrics, cost tracking, 
 
 ## 🤖 Supported Agents
 
-| Agent | Installation Method | Features |
-|-------|---------------------|----------|
-| **Claude Code** | `settings.json` + shell script | Full feature set |
-| **Codex CLI** | `config.toml` (built-in items) | Subset (API limited) |
-| **Hermes Agent** | YAML config + shell script | Full feature set |
-| **Pi Agent** | TypeScript extension | Full feature set |
+| Agent | Installation Method | 2-Line | Features |
+|-------|---------------------|--------|----------|
+| **Claude Code** | `settings.json` + shell script | ✅ | Full feature set |
+| **Codex CLI** | `config.toml` + tmux wrapper | ✅ | Full feature set (tmux 3.0+) |
+| **Hermes Agent** | YAML config + shell script | ✅ | Full feature set |
+| **Pi Agent** | TypeScript extension | ✅ | Full feature set |
+| **Antigravity CLI** | Shell script | ✅ | Context, tokens, git, state, plan tier |
 
 ---
 
@@ -63,6 +65,9 @@ cd HYPERSTATUS_v3
 
 # Pi Agent
 ./scripts/setup.sh install pi
+
+# Antigravity CLI
+./scripts/setup.sh install antigravity
 ```
 
 ---
@@ -74,6 +79,7 @@ cd HYPERSTATUS_v3
 - **python3** (for JSON parsing & config merging)
 - **git** (for git status metrics)
 - **Nerd Font** (for Powerline icons)
+- **tmux 3.0+** (for Codex 2-line mode)
 
 ### Optional: Compression Proxies
 
@@ -99,14 +105,17 @@ HYPERSTATUS_v3/
 │   └── quota-fetch.sh        # Quota API polling
 ├── claude-code/
 │   ├── settings.json         # Claude Code statusLine config
-│   └── statusline.sh         # Main status bar script
+│   └── statusline.sh         # Main status bar script (2-line)
+├── antigravity/
+│   └── statusline.sh         # Antigravity CLI status bar (2-line)
 ├── codex/
-│   └── config.toml           # Codex status_line config
+│   ├── config.toml           # Codex status_line config
+│   └── codex-wrapper.sh      # Tmux wrapper with 2-line status bar
 ├── hermes/
 │   ├── config.yaml           # Hermes gateway + status_bar config
-│   └── statusline.sh         # Full-featured status bar
+│   └── statusline.sh         # Full-featured status bar (2-line)
 ├── pi/
-│   ├── hyperstatus-extension.ts  # Pi extension entry
+│   ├── hyperstatus-extension.ts  # Pi extension entry (2-line)
 │   ├── powerline-config.ts       # Powerline rendering
 │   └── package.json              # Extension manifest
 ├── mockups/                  # Visual mockups (PDF/PNG)
@@ -131,6 +140,16 @@ HYPERSTATUS_v3/
     "padding": 1,
     "refreshInterval": 3,
     "hideVimModeIndicator": true
+  }
+}
+```
+
+### Antigravity CLI (`~/.config/antigravity-cli/settings.json`)
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.config/antigravity-cli/statusline.sh"
   }
 }
 ```
@@ -168,6 +187,23 @@ gateway:
 
 ### Pi Agent
 Run `/reload` in Pi after install to activate the `hyperstatus` extension.
+
+---
+
+## 🎨 Display Modes
+
+### 2-Line Mode (terminal ≥80 columns)
+
+```
+Line 1:  󰜖 csonnet │  myproject   main +42/-7 │ ████░░░░░░ 42.5% │ 15.5K/200K │ $1.23 │ 12m │ ⚡ │ Y
+Line 2:  ⠿ 42% │ 󰧮 15.3t/s │  5h42%  7d28% │  A:$4.20 O:$12.50 │  2 │ 󰄐 ▼1.2K │  󰚯 worktree │  csonnet→gpt4o
+```
+
+- **Line 1** (teal bg): Primary metrics — model, project, git, context, tokens, cost, duration, effort, permission
+- **Line 2** (mauve/dim bg): Supplementary metrics — cache, throughput, rate limits, budget, bg tasks, compression, proxy
+
+### 1-Line Mode (narrow terminal, <80 columns)
+Compact single-bar layout with smart segment truncation.
 
 ---
 
@@ -250,7 +286,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 - **Catppuccin Mocha** color palette
 - **Nerd Fonts** for Powerline icons
 - **RTK** and **Headroom** for compression integration
-- All four agent teams for excellent extensibility
+- All five agent teams for excellent extensibility
 
 ---
 

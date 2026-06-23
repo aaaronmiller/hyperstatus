@@ -199,64 +199,65 @@ render_status() {
     BUDGET_DISPLAY+=" O:\$$(printf '%.2f' "$OPENAI_BUDGET_REMAIN")"
   fi
 
-  # LEFT: model | proxy | project | branch | git status | compression
-  LEFT="#[fg=#b4befe,bg=#1a6b5a] 󰜖 ${SHORT_MODEL}${PROXY_INDICATOR} #[fg=#1a6b5a,bg=#155044]#[fg=#cdd6f4,bg=#155044]  ${PROJECT_DISPLAY}"
+  # LINE 1 (top): model │ project │ branch │ git status │ compression
+  LINE1="#[fg=#b4befe,bg=#1a6b5a] 󰜖 ${SHORT_MODEL}${PROXY_INDICATOR} #[fg=#1a6b5a,bg=#155044]#[fg=#cdd6f4,bg=#155044]  ${PROJECT_DISPLAY}"
   if [ -n "$GIT_BRANCH" ]; then
-    LEFT+=" #[fg=#a6e3a1]󰐘 ${GIT_BRANCH}${GIT_STATUS}"
+    LINE1+=" #[fg=#a6e3a1]󰐘 ${GIT_BRANCH}${GIT_STATUS}"
   fi
-  LEFT+="${COMP_DISPLAY}"
+  LINE1+="${COMP_DISPLAY}"
 
-  # RIGHT: context% | tokens | cache | cost | t/s | quota/rate | budget | duration | perm
-  RIGHT="#[fg=#1e1e2e,bg=${CTX_COLOR}] ${BAR} ${CTX_PCT}% #[fg=#cdd6f4,bg=#45475a] $(fmt_t $TOTAL_TOKENS)/$(fmt_t $CTX_SIZE) #[fg=#74c7ec]⠿ ${CACHE_PCT}% #[fg=#f9e2af,bg=#313244] $$(printf '%.2f' ${TOTAL_COST})"
+  # LINE 2 (bottom): context bar │ tokens (left) │ cache │ cost │ t/s │ rate limits │ budget │ duration │ perm (right)
+  LINE2="#[align=left]#[fg=#1e1e2e,bg=${CTX_COLOR}] ${BAR} ${CTX_PCT}% #[fg=#cdd6f4,bg=#45475a] $(fmt_t $TOTAL_TOKENS)/$(fmt_t $CTX_SIZE)"
+  LINE2+="#[align=right]#[fg=#74c7ec]⠿ ${CACHE_PCT}% #[fg=#f9e2af,bg=#313244] \$$(printf '%.2f' ${TOTAL_COST})"
   if [ "$TOK_PER_S" != "0" ]; then
-    RIGHT+=" #[fg=#a6adc8]${TOK_PER_S}t/s"
+    LINE2+=" #[fg=#a6adc8]${TOK_PER_S}t/s"
   fi
 
   # Quota / Rate segments
   if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
     # Dual quota mode
     R5_CLR=$(rate_color "${RATE5:-0}")
-    RIGHT+=" #[fg=#9370db,bg=#1e1e2e]󰜦 5h${RATE5}%/7d${RATE7}%|real"
+    LINE2+=" #[fg=#9370db,bg=#1e1e2e]󰜦 5h${RATE5}%/7d${RATE7}%|real"
     if [ -n "$OPENAI_5H_PCT" ]; then
-      RIGHT+=":5h${OPENAI_5H_PCT}%"
+      LINE2+=":5h${OPENAI_5H_PCT}%"
     fi
     if [ -n "$OPENAI_7D_PCT" ]; then
-      RIGHT+="/7d${OPENAI_7D_PCT}%"
+      LINE2+="/7d${OPENAI_7D_PCT}%"
     fi
   else
     if [ "$RATE5" != "0" ]; then
       R5_CLR=$(rate_color "$RATE5")
-      RIGHT+=" #[fg=${R5_CLR}]5h${RATE5}%"
+      LINE2+=" #[fg=${R5_CLR}]5h${RATE5}%"
     fi
     if [ "$RATE7" != "0" ]; then
       R7_CLR=$(rate_color "$RATE7")
-      RIGHT+=" #[fg=${R7_CLR}]7d${RATE7}%"
+      LINE2+=" #[fg=${R7_CLR}]7d${RATE7}%"
     fi
     # External quota from onWatch (supplementary)
     if [ -n "$ANTHROPIC_5H_PCT" ]; then
-      RIGHT+=" #[fg=#9370db]A:${ANTHROPIC_5H_PCT}%"
+      LINE2+=" #[fg=#9370db]A:${ANTHROPIC_5H_PCT}%"
     fi
     if [ -n "$OPENAI_5H_PCT" ]; then
-      RIGHT+=" #[fg=#9370db]O:${OPENAI_5H_PCT}%"
+      LINE2+=" #[fg=#9370db]O:${OPENAI_5H_PCT}%"
     fi
   fi
 
   # Budget remaining
   if [ -n "$BUDGET_DISPLAY" ]; then
-    RIGHT+=" #[fg=#a6e3a1]${BUDGET_DISPLAY}"
+    LINE2+=" #[fg=#a6e3a1]${BUDGET_DISPLAY}"
   fi
 
   # OpenAI request remaining
   if [ -n "$OPENAI_REQ_REMAIN" ] && [ "$OPENAI_REQ_REMAIN" != "0" ] && [ "$OPENAI_REQ_REMAIN" != "" ]; then
-    RIGHT+=" #[fg=#74c7ec]OAI:${OPENAI_REQ_REMAIN}req"
+    LINE2+=" #[fg=#74c7ec]OAI:${OPENAI_REQ_REMAIN}req"
   fi
 
-  RIGHT+=" #[fg=#cdd6f4,bg=#45475a] ${DUR_FMT}"
-  RIGHT+="${PERM_DISPLAY}"
+  LINE2+=" #[fg=#cdd6f4,bg=#45475a] ${DUR_FMT}"
+  LINE2+="${PERM_DISPLAY}"
 
-  # Set tmux status bar
-  tmux set-option -t "$SESSION_NAME" status-left "$LEFT " 2>/dev/null || true
-  tmux set-option -t "$SESSION_NAME" status-right " ${RIGHT}" 2>/dev/null || true
+  # Set tmux two-line status bar (status-format[0] = top line, status-format[1] = bottom line)
+  tmux set-option -t "$SESSION_NAME" status-format[0] "$LINE1" 2>/dev/null || true
+  tmux set-option -t "$SESSION_NAME" status-format[1] "$LINE2" 2>/dev/null || true
 }
 
 # --- Launch ---
@@ -273,9 +274,10 @@ tmux new-session -d -s "$SESSION_NAME" -x "$(tput cols)" -y "$(tput lines)" 2>/d
 tmux set-option -t "$SESSION_NAME" status on
 tmux set-option -t "$SESSION_NAME" status-position bottom
 tmux set-option -t "$SESSION_NAME" status-style "bg=#1e1e2e,fg=#cdd6f4"
-tmux set-option -t "$SESSION_NAME" status-left-length 80
-tmux set-option -t "$SESSION_NAME" status-right-length 120
 tmux set-option -t "$SESSION_NAME" status-interval 3
+# Initialize two-line status bar (updated dynamically by render_status)
+tmux set-option -t "$SESSION_NAME" status-format[0] " HYPERSTATUS v3.0 " 2>/dev/null || true
+tmux set-option -t "$SESSION_NAME" status-format[1] " " 2>/dev/null || true
 
 # Start background status updater
 (

@@ -1,16 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  HYPERSTATUS v3.0 — Claude Code Status Bar
-#  Powerline-style status bar with full metric coverage + QUOTA integration
-#  Install: Add to ~/.claude/settings.json under "statusLine"
-#  Design: Left-justified variable-width items, right-justified fixed-width items
+#  HYPERSTATUS v3.2 — Claude Code Status Bar
+#  Powerline-style status bar with 2-line mode + full metric coverage + QUOTA
 #
-#  v3.0 NEW: Quota display from multiple sources:
-#    - Agent rate limits (5h/7d) — from Claude's statusline JSON
-#    - onWatch provider quotas — from SQLite daemon
-#    - ccusage session data — from local JSONL parsing
-#    - Proxy quota data — from LiteLLM / LLM-API-Key-Proxy
-#    - Proxy model detection — flags when proxy swaps models
+#  v3.2 NEW: 2-line mode when terminal width >= 80 columns
+#    Line 1: model | project | git | context | tokens | cost | duration | effort | perm
+#    Line 2: cache | t/s | rate limits | budget | bg_tasks | compression | proxy
+#  Narrow mode (<80 cols): single compact line with smart segment hiding
 # ============================================================================
 
 set -euo pipefail
@@ -36,6 +32,7 @@ C_FG_SAPPHIRE='\033[38;5;116m'
 C_FG_RED='\033[38;5;210m'
 C_FG_LAVENDER='\033[38;5;183m'
 C_FG_PEACH='\033[38;5;215m'
+C_FG_DARK='\033[38;5;59m'   # Muted for secondary line prefixes
 C_RESET='\033[0m'
 
 # Powerline separators (Nerd Font codepoints)
@@ -43,6 +40,7 @@ PL_RIGHT='\ue0b0'    #
 PL_LEFT='\ue0b2'      # 
 PL_RIGHT_THIN='\ue0b1'  # 
 PL_LEFT_THIN='\ue0b3'   # 
+PL_DOWN='\ue0bc'       #  — line 2 connector
 
 # Nerd Font icons
 IC_MODEL='\ue716'       # 󰜖 AI/Model
@@ -51,7 +49,7 @@ IC_COST='\uf155'        #
 IC_GIT='\ue725'         # 
 IC_BRANCH='\uf418'      # 󰐘 Git branch
 IC_TIME='\uf017'        # 
-IC_TOKEN='\uf1c9'       # 
+IC_TOKEN='\uf1c9'      # 
 IC_CACHE='\uf021'       # 
 IC_RATE5='\uf252'       # 
 IC_RATE7='\uf254'       # 
@@ -68,9 +66,9 @@ IC_LINES='\uf1dc'       #
 IC_WORKTREE='\uf77a'    # 
 IC_SESSION='\uf2db'     # 
 IC_QUOTA='\uf0ec'       #  Quota/gauge icon
-IC_PROXY='\uf6ff'       #  Proxy/swap icon
-IC_PROVIDER='\uf1c0'    #  Database/provider icon
-IC_WARN='\uf071'        #  Warning triangle
+IC_PROXY='\uf6ff'       # 
+IC_PROVIDER='\uf1c0'    # 
+IC_WARN='\uf071'        # 
 
 # --- Helper: JSON value extraction ---
 jval() {
@@ -97,28 +95,20 @@ else:
 # --- Helper: Context color based on percentage ---
 ctx_color() {
   local pct="$1"
-  if (( $(echo "$pct >= 95" | bc -l) )); then
-    echo -e "$C_BG_CRIT"
-  elif (( $(echo "$pct >= 80" | bc -l) )); then
-    echo -e "$C_BG_WARN"
-  elif (( $(echo "$pct >= 50" | bc -l) )); then
-    echo -e "$C_BG3"
-  else
-    echo -e "$C_BG_OK"
+  if (( $(echo "$pct >= 95" | bc -l) )); then echo -e "$C_BG_CRIT"
+  elif (( $(echo "$pct >= 80" | bc -l) )); then echo -e "$C_BG_WARN"
+  elif (( $(echo "$pct >= 50" | bc -l) )); then echo -e "$C_BG3"
+  else echo -e "$C_BG_OK"
   fi
 }
 
-# --- Helper: Quota color based on used percentage (REVERSED: high = bad) ---
+# --- Helper: Quota color ---
 quota_color() {
   local used_pct="$1"
-  if (( $(echo "$used_pct >= 95" | bc -l) )); then
-    echo -e "$C_BG_CRIT"   # Red — quota almost exhausted
-  elif (( $(echo "$used_pct >= 80" | bc -l) )); then
-    echo -e "$C_BG_WARN"   # Orange — approaching limit
-  elif (( $(echo "$used_pct >= 50" | bc -l) )); then
-    echo -e "$C_BG3"       # Yellow — moderate usage
-  else
-    echo -e "$C_BG_QUOTA"  # Mauve — comfortable
+  if (( $(echo "$used_pct >= 95" | bc -l) )); then echo -e "$C_BG_CRIT"
+  elif (( $(echo "$used_pct >= 80" | bc -l) )); then echo -e "$C_BG_WARN"
+  elif (( $(echo "$used_pct >= 50" | bc -l) )); then echo -e "$C_BG3"
+  else echo -e "$C_BG_QUOTA"
   fi
 }
 
@@ -141,7 +131,7 @@ fmt_duration() {
   local s=$((ms / 1000))
   local m=$((s / 60))
   local h=$((m / 60))
-  if [ "$h" -gt 0 ]; then echo "${h}h${m}m"
+  if [ "$h" -gt 0 ]; then echo "${h}h$((m % 60))m"
   elif [ "$m" -gt 0 ]; then echo "${m}m"
   else echo "${s}s"
   fi
@@ -177,7 +167,6 @@ import json
 try:
     with open('/tmp/hyperstatus-quota.json') as f:
         d = json.load(f)
-    # Navigate dotted key path
     keys = '$key'.split('.')
     v = d
     for k in keys:
@@ -228,6 +217,7 @@ PR_NUM=$(jval "pr.number")
 PR_STATE=$(jval "pr.review_state")
 WORKTREE=$(jval "worktree.name")
 VERSION=$(jval "version")
+TERM_WIDTH=$(jval "terminal_width")
 
 # Cache tokens
 CACHE_CREATE=$(jval "context_window.current_usage.cache_creation")
@@ -241,7 +231,7 @@ else
   CACHE_PCT="0"
 fi
 
-# Latency
+# Latency / tokens per second
 if [ -n "$API_DURATION_MS" ] && [ "$API_DURATION_MS" -gt 0 ] && [ -n "$OUTPUT_TOKENS" ] && [ "$OUTPUT_TOKENS" -gt 0 ]; then
   TOK_PER_S=$(echo "scale=1; $OUTPUT_TOKENS * 1000 / $API_DURATION_MS" | bc 2>/dev/null || echo "0")
 else
@@ -283,71 +273,39 @@ COMP_SAVED="${HEADROOM_TOKENS_SAVED:-$_HEADROOM_SAVED}"
 RTK_SAVED="${RTK_TOKENS_SAVED:-$_RTK_SAVED}"
 COMP_RATIO="${HEADROOM_COMPRESSION_RATIO:-$_HEADROOM_RATIO}"
 
-if [ -n "$RTK_SAVED" ] && [ "$RTK_SAVED" != "0" ]; then
-  COMP_DISPLAY=" ▼$(fmt_tokens "$RTK_SAVED")"
-elif [ -n "$COMP_SAVED" ] && [ "$COMP_SAVED" != "0" ]; then
-  COMP_DISPLAY=" ▼$(fmt_tokens "$COMP_SAVED")"
-else
-  COMP_DISPLAY=""
-fi
-
 # ==============================================================================
 #  QUOTA DATA (from quota-fetch.sh / shared state)
-#  This is the v3.0 addition: multi-provider quota from external tools.
 # ==============================================================================
-
-# --- Read proxy detection ---
 PROXY_ACTIVE=$(quota_val "summary.proxy_info" "")
 PROXY_MODEL_SWAPPED=$(quota_val "summary.proxy_info.model_swapped" "false")
 PROXY_AGENT_MODEL=$(quota_val "summary.proxy_info.agent_model" "")
 PROXY_ACTUAL_MODEL=$(quota_val "summary.proxy_info.actual_model" "")
 
-# If proxy is swapping models, show the ACTUAL model being used
+# Proxy model detection
+SEG_PROXY=""
 if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
   PROXY_ACTUAL_SHORT=$(echo "$PROXY_ACTUAL_MODEL" | sed 's/claude-/c/' | sed 's/-202.*//' | sed 's/gpt-4o/gpt4o/' | sed 's/o4-mini/o4m')
   SEG_PROXY=" ${IC_PROXY}${SHORT_MODEL}→${PROXY_ACTUAL_SHORT}"
-  # Use the ACTUAL model's quota, not the agent's perceived one
-  SHORT_MODEL="${SHORT_MODEL}↗"  # Arrow indicates proxy redirect
-else
-  SEG_PROXY=""
+  SHORT_MODEL="${SHORT_MODEL}↗"
 fi
 
-# --- Read per-provider quota from onWatch ---
+# Read per-provider quota
 ANTHROPIC_5H_PCT=$(quota_val "summary.providers.anthropic.5h_used_pct" "")
 ANTHROPIC_7D_PCT=$(quota_val "summary.providers.anthropic.7d_used_pct" "")
 OPENAI_5H_PCT=$(quota_val "summary.providers.openai.5h_used_pct" "")
 OPENAI_7D_PCT=$(quota_val "summary.providers.openai.7d_used_pct" "")
 GEMINI_DAILY_PCT=$(quota_val "summary.providers.gemini.daily_used_pct" "")
-
-# Budget data from LiteLLM
 ANTHROPIC_BUDGET_REMAIN=$(quota_val "summary.providers.anthropic.budget_remaining_usd" "")
 OPENAI_BUDGET_REMAIN=$(quota_val "summary.providers.openai.budget_remaining_usd" "")
-
-# OpenAI rate limit headers (from direct API call)
 OPENAI_REQ_REMAIN=$(quota_val "openai_headers.requests_remaining" "")
-OPENAI_TOKEN_REMAIN=$(quota_val "openai_headers.tokens_remaining" "")
-
-# ccusage data (secondary source)
 CCUSAGE_ANTHROPIC_COST=$(quota_val "summary.providers.anthropic.ccusage_cost" "")
 CCUSAGE_OPENAI_COST=$(quota_val "summary.providers.openai.ccusage_cost" "")
 
 # --- Build quota segments ---
-# Strategy: Show agent's own rate limits first, then provider quota from external tools
-# The agent rate limits are from the statusline JSON (most immediate)
-# The external quota data is from onWatch/proxy (more comprehensive but delayed)
-
-# Agent-facing rate limits (always available from statusline JSON)
 AGENT_RATE5_PCT="${RATE5_PCT:-0}"
 AGENT_RATE7_PCT="${RATE7_PCT:-0}"
 
-# Determine which quota to show:
-# 1. If proxy is swapping models, show REAL provider quota (not agent's)
-# 2. If no proxy, show agent's own rate limits
-# 3. Always also show external quota data if available as supplementary
-
 if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  # PROXY MODE: Show the real provider's quota, not the agent's
-  # Determine which provider the proxy is actually routing to
   QUOTA_PROVIDER=""
   if echo "$PROXY_ACTUAL_MODEL" | grep -qi "gpt\|o4\|o3\|dall"; then
     QUOTA_PROVIDER="openai"
@@ -363,86 +321,18 @@ if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; t
     DISPLAY_RATE7="${ANTHROPIC_7D_PCT:-$AGENT_RATE7_PCT}"
   fi
 else
-  # DIRECT MODE: Agent connects directly, its own rate limits are accurate
   QUOTA_PROVIDER=""
   DISPLAY_RATE5="$AGENT_RATE5_PCT"
   DISPLAY_RATE7="$AGENT_RATE7_PCT"
 fi
 
-# Build quota display segments
-# Format: 󰜦 provider:5h42%7d28%  (compact single segment for quota)
-# Or:      󰜦 anthropic:5h42%/7d28%  (with provider name if proxy is active)
-
-SEG_QUOTA=""
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  # Show BOTH agent-facing AND real provider quota when proxy is swapping
-  # Agent quota (what Claude thinks)
-  if [ -n "$AGENT_RATE5_PCT" ] && [ "$AGENT_RATE5_PCT" != "0" ]; then
-    AGENT_RATE5_FMT=$(printf "%3d" "$AGENT_RATE5_PCT")
-  else
-    AGENT_RATE5_FMT=""
-  fi
-  if [ -n "$AGENT_RATE7_PCT" ] && [ "$AGENT_RATE7_PCT" != "0" ]; then
-    AGENT_RATE7_FMT=$(printf "%3d" "$AGENT_RATE7_PCT")
-  else
-    AGENT_RATE7_FMT=""
-  fi
-
-  # Real provider quota
-  if [ -n "$DISPLAY_RATE5" ] && [ "$DISPLAY_RATE5" != "0" ] && [ "$DISPLAY_RATE5" != "" ]; then
-    REAL_RATE5_FMT=$(printf "%3d" "$DISPLAY_RATE5")
-  else
-    REAL_RATE5_FMT=""
-  fi
-  if [ -n "$DISPLAY_RATE7" ] && [ "$DISPLAY_RATE7" != "0" ] && [ "$DISPLAY_RATE7" != "" ]; then
-    REAL_RATE7_FMT=$(printf "%3d" "$DISPLAY_RATE7")
-  else
-    REAL_RATE7_FMT=""
-  fi
-
-  # Show: 󰜦 agent:5h42%7d28%|real:5h67%7d45%
-  SEG_QUOTA_PARTS="${IC_QUOTA}"
-  if [ -n "$AGENT_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=" 5h${AGENT_RATE5_FMT}%%"; fi
-  if [ -n "$AGENT_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${AGENT_RATE7_FMT}%%"; fi
-  SEG_QUOTA_PARTS+="|${QUOTA_PROVIDER}"
-  if [ -n "$REAL_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=":5h${REAL_RATE5_FMT}%%"; fi
-  if [ -n "$REAL_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${REAL_RATE7_FMT}%%"; fi
-  SEG_QUOTA=" ${SEG_QUOTA_PARTS}"
-else
-  # No proxy — show agent's own rate limits (standard behavior)
-  if [ -n "$DISPLAY_RATE5" ] && [ "$DISPLAY_RATE5" != "0" ] && [ "$DISPLAY_RATE5" != "" ]; then
-    RATE5_FMT=$(printf "%3d" "$DISPLAY_RATE5")
-    # Quota color based on used percentage
-    RATE5_CLR=$(quota_color "$RATE5_FMT")
-  else
-    RATE5_FMT=""
-    RATE5_CLR=""
-  fi
-  if [ -n "$DISPLAY_RATE7" ] && [ "$DISPLAY_RATE7" != "0" ] && [ "$DISPLAY_RATE7" != "" ]; then
-    RATE7_FMT=$(printf "%3d" "$DISPLAY_RATE7")
-    RATE7_CLR=$(quota_color "$RATE7_FMT")
-  else
-    RATE7_FMT=""
-    RATE7_CLR=""
-  fi
-fi
-
-# Budget remaining display (from LiteLLM or onWatch)
+# Budget segments
 SEG_BUDGET=""
 if [ -n "$ANTHROPIC_BUDGET_REMAIN" ] && [ "$ANTHROPIC_BUDGET_REMAIN" != "0" ] && [ "$ANTHROPIC_BUDGET_REMAIN" != "" ]; then
   SEG_BUDGET+=" A:\$$(printf '%.2f' "$ANTHROPIC_BUDGET_REMAIN")"
 fi
 if [ -n "$OPENAI_BUDGET_REMAIN" ] && [ "$OPENAI_BUDGET_REMAIN" != "0" ] && [ "$OPENAI_BUDGET_REMAIN" != "" ]; then
   SEG_BUDGET+=" O:\$$(printf '%.2f' "$OPENAI_BUDGET_REMAIN")"
-fi
-if [ -n "$SEG_BUDGET" ]; then
-  SEG_BUDGET=" ${IC_COST}${SEG_BUDGET}"
-fi
-
-# OpenAI direct quota (from header probing)
-SEG_OPENAI_QUOTA=""
-if [ -n "$OPENAI_REQ_REMAIN" ] && [ "$OPENAI_REQ_REMAIN" != "0" ] && [ "$OPENAI_REQ_REMAIN" != "" ]; then
-  SEG_OPENAI_QUOTA=" OAI:${OPENAI_REQ_REMAIN}req"
 fi
 
 # --- Permission level detection ---
@@ -457,205 +347,220 @@ fi
 CTX_CLR=$(ctx_color "${CTX_PCT:-0}")
 BAR=$(ctx_bar "${CTX_PCT:-0}")
 
+# Background tasks
+BG_TASK_COUNT="${CLAUDE_BG_TASKS:-0}"
+
 # ==============================================================================
-#  BUILD STATUS BAR
-#  Layout: [VARIABLE-WIDTH LEFT] ... spacer ... [FIXED-WIDTH RIGHT]
-#  LEFT:  model | project/branch | worktree | PR | lines | compression | proxy
-#  RIGHT: context% | tokens | cache | cost | quota | rate5/7 | budget | duration | effort | perm
+#  BUILD SEGMENTS
 # ==============================================================================
 
-# --- LEFT SEGMENTS ---
+# --- LEFT SIDE (shared between both modes) ---
 SEG_MODEL="${IC_MODEL} ${SHORT_MODEL}"
 SEG_PROJECT="${IC_DIR} ${PROJECT_DISPLAY}"
+SEG_GIT=""
 if [ -n "$GIT_BRANCH" ]; then
   SEG_GIT=" ${IC_BRANCH} ${GIT_BRANCH}"
-else
-  SEG_GIT=""
 fi
 if [ -n "$WORKTREE" ] && [ "$WORKTREE" != "$GIT_BRANCH" ]; then
   SEG_WORKTREE=" ${IC_WORKTREE} ${WORKTREE}"
 else
   SEG_WORKTREE=""
 fi
+SEG_PR=""
 if [ -n "$PR_NUM" ] && [ "$PR_NUM" != "0" ]; then
   SEG_PR=" ${IC_PR} #${PR_NUM}"
-else
-  SEG_PR=""
 fi
-
-# Lines changed
+SEG_LINES=""
 if [ -n "$LINES_ADD" ] && [ "$LINES_ADD" != "0" ]; then
   SEG_LINES=" +${LINES_ADD}/-${LINES_REM}"
-else
-  SEG_LINES=""
 fi
 
-LEFT_PART="${SEG_MODEL}${SEG_PROXY} │ ${SEG_PROJECT}${SEG_GIT}${SEG_WORKTREE}${SEG_PR}${SEG_LINES}${COMP_DISPLAY}"
+# Compression display
+if [ -n "$RTK_SAVED" ] && [ "$RTK_SAVED" != "0" ]; then
+  COMP_DISPLAY=" ${IC_COMPRESS}▼$(fmt_tokens "$RTK_SAVED")"
+elif [ -n "$COMP_SAVED" ] && [ "$COMP_SAVED" != "0" ]; then
+  COMP_DISPLAY=" ${IC_COMPRESS}▼$(fmt_tokens "$COMP_SAVED")"
+else
+  COMP_DISPLAY=""
+fi
 
-# --- RIGHT SEGMENTS (fixed width) ---
-# Context with color
+# --- RIGHT SIDE PRIMARY (Line 1) ---
 CTX_PCT_FMT=$(printf "%5.1f" "${CTX_PCT:-0}")
 SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%%"
-
-# Tokens
 TOTAL_FMT=$(fmt_tokens "${TOTAL_TOKENS:-0}")
 CTX_SIZE_FMT=$(fmt_tokens "${CTX_SIZE:-0}")
 SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}/${CTX_SIZE_FMT}"
-
-# Cache
-CACHE_PCT_FMT=$(printf "%3d" "${CACHE_PCT:-0}")
-SEG_CACHE="${IC_CACHE} ${CACHE_PCT_FMT}%%"
-
-# Cost
 COST_FMT=$(fmt_cost "${TOTAL_COST:-0}")
 SEG_COST="${IC_COST} ${COST_FMT}"
-
-# Throughput
-if [ "$TOK_PER_S" != "0" ]; then
-  SEG_SPEED="${IC_LATENCY} ${TOK_PER_S}t/s"
-else
-  SEG_SPEED=""
-fi
-
-# Rate limits / Quota
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  # PROXY MODE: Show dual quota segment
-  SEG_RATE5=""
-  SEG_RATE7=""
-  # SEG_QUOTA already built above with dual info
-else
-  # DIRECT MODE: Standard rate limit segments with threshold coloring
-  SEG_RATE5=""
-  if [ -n "$RATE5_FMT" ]; then
-    SEG_RATE5="${IC_RATE5}5h${RATE5_FMT}%%"
-  fi
-  SEG_RATE7=""
-  if [ -n "$RATE7_FMT" ]; then
-    SEG_RATE7="${IC_RATE7}7d${RATE7_FMT}%%"
-  fi
-fi
-
-# Duration
 DUR_FMT=$(fmt_duration "${DURATION_MS:-0}")
 SEG_DURATION="${IC_TIME} ${DUR_FMT}"
 
-# Effort level
+# Effort icon
+SEG_EFFORT=""
 if [ -n "$EFFORT" ]; then
   case "$EFFORT" in
     max|xhigh) SEG_EFFORT="${IC_EFFORT}⚡" ;;
     high) SEG_EFFORT="${IC_EFFORT}▲" ;;
     medium) SEG_EFFORT="${IC_EFFORT}●" ;;
     low) SEG_EFFORT="${IC_EFFORT}▼" ;;
-    *) SEG_EFFORT="" ;;
   esac
-else
-  SEG_EFFORT=""
 fi
 
-# Thinking mode
+# Thinking
+SEG_THINK=""
 if [ "$THINKING" = "true" ]; then
   SEG_THINK=" ${IC_THINK}✦"
-else
-  SEG_THINK=""
 fi
 
-# Permission level
+# Permission
+SEG_PERM=""
 case "$PERM_LEVEL" in
   yolo) SEG_PERM=" ${IC_PERM}Y" ;;
   auto) SEG_PERM=" ${IC_PERM}A" ;;
-  ask) SEG_PERM="" ;;
-  *) SEG_PERM="" ;;
 esac
 
-# Vim mode
-if [ -n "$VIM_MODE" ] && [ "$VIM_MODE" != "NORMAL" ]; then
-  SEG_VIM=" ${IC_VIM}${VIM_MODE}"
-else
-  SEG_VIM=""
+# --- RIGHT SIDE SECONDARY (Line 2) ---
+# Cache
+CACHE_PCT_FMT=$(printf "%3d" "${CACHE_PCT:-0}")
+SEG_CACHE="${IC_CACHE} ${CACHE_PCT_FMT}%%"
+
+# Throughput
+SEG_SPEED=""
+if [ "$TOK_PER_S" != "0" ]; then
+  SEG_SPEED="${IC_LATENCY} ${TOK_PER_S}t/s"
 fi
 
-# Background tasks
-BG_TASK_COUNT="${CLAUDE_BG_TASKS:-0}"
+# Rate limits
+SEG_RATE5=""
+SEG_RATE7=""
+SEG_QUOTA=""
+if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
+  # Proxy mode: dual quota segment
+  _a5=""; _a7=""
+  if [ -n "$AGENT_RATE5_PCT" ] && [ "$AGENT_RATE5_PCT" != "0" ]; then _a5=$(printf "%3d" "$AGENT_RATE5_PCT"); fi
+  if [ -n "$AGENT_RATE7_PCT" ] && [ "$AGENT_RATE7_PCT" != "0" ]; then _a7=$(printf "%3d" "$AGENT_RATE7_PCT"); fi
+  _r5=""; _r7=""
+  if [ -n "$DISPLAY_RATE5" ] && [ "$DISPLAY_RATE5" != "0" ] && [ "$DISPLAY_RATE5" != "" ]; then _r5=$(printf "%3d" "$DISPLAY_RATE5"); fi
+  if [ -n "$DISPLAY_RATE7" ] && [ "$DISPLAY_RATE7" != "0" ] && [ "$DISPLAY_RATE7" != "" ]; then _r7=$(printf "%3d" "$DISPLAY_RATE7"); fi
+  SEG_QUOTA="${IC_QUOTA}"
+  if [ -n "$_a5" ]; then SEG_QUOTA+=" 5h${_a5}%%"; fi
+  if [ -n "$_a7" ]; then SEG_QUOTA+="/7d${_a7}%%"; fi
+  if [ -n "$_r5" ] || [ -n "$_r7" ]; then SEG_QUOTA+="|${QUOTA_PROVIDER}"; fi
+  if [ -n "$_r5" ]; then SEG_QUOTA+=":5h${_r5}%%"; fi
+  if [ -n "$_r7" ]; then SEG_QUOTA+="/7d${_r7}%%"; fi
+else
+  if [ "$DISPLAY_RATE5" != "0" ] && [ -n "$DISPLAY_RATE5" ]; then
+    R5_FMT=$(printf "%3d" "$DISPLAY_RATE5")
+    SEG_RATE5="${IC_RATE5}5h${R5_FMT}%%"
+  fi
+  if [ "$DISPLAY_RATE7" != "0" ] && [ -n "$DISPLAY_RATE7" ]; then
+    R7_FMT=$(printf "%3d" "$DISPLAY_RATE7")
+    SEG_RATE7="${IC_RATE7}7d${R7_FMT}%%"
+  fi
+  SEG_QUOTA=""  # not used in direct mode
+fi
+
+# Open remaining quota
+SEG_OPENAI_QUOTA=""
+if [ -n "$OPENAI_REQ_REMAIN" ] && [ "$OPENAI_REQ_REMAIN" != "0" ] && [ "$OPENAI_REQ_REMAIN" != "" ]; then
+  SEG_OPENAI_QUOTA=" OAI:${OPENAI_REQ_REMAIN}req"
+fi
+
+# Background tasks segment (for line 2)
 SEG_BG=""
 if [ "$BG_TASK_COUNT" -gt 0 ]; then
-  SEG_BG=" ${IC_BG_TASK}${BG_TASK_COUNT}"
+  SEG_BG="${IC_BG_TASK}${BG_TASK_COUNT}"
 fi
 
-# Assemble right side — include quota/budget segments
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  # Proxy mode: replace rate5/7 with dual quota segment
-  RIGHT_PART="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_CACHE} │ ${SEG_COST}${SEG_SPEED} │ ${SEG_QUOTA}${SEG_BUDGET}${SEG_OPENAI_QUOTA} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}${SEG_BG}${SEG_VIM}"
-else
-  # Normal mode: standard rate5/7 with optional budget/quota extras
-  RIGHT_PART="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_CACHE} │ ${SEG_COST}${SEG_SPEED} │ ${SEG_RATE5}${SEG_RATE7}${SEG_BUDGET}${SEG_OPENAI_QUOTA} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}${SEG_BG}${SEG_VIM}"
+# Vim mode
+SEG_VIM=""
+if [ -n "$VIM_MODE" ] && [ "$VIM_MODE" != "NORMAL" ]; then
+  SEG_VIM=" ${IC_VIM}${VIM_MODE}"
 fi
 
-# --- RENDER WITH POWERLINE SEGMENTS ---
-# Line 1: Powerline bar with colored segments
-echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${RIGHT_PART} ${C_RESET}"
-
-# Line 2: Context detail bar (if context > 50%)
-if (( $(echo "${CTX_PCT:-0} >= 50" | bc -l) )); then
-  CTX_REMAINING=$(echo "100 - ${CTX_PCT:-0}" | bc)
-  echo -e "${CTX_CLR}${C_FG_BRIGHT} ${IC_CTX} CONTEXT: $(fmt_tokens "${INPUT_TOKENS:-0}") in / $(fmt_tokens "${CTX_SIZE:-0}") max │ Remaining: ${CTX_REMAINING}% │ Output: $(fmt_tokens "${OUTPUT_TOKENS:-0}") │ Cache R: $(fmt_tokens "${CACHE_READ:-0}") / Cache W: $(fmt_tokens "${CACHE_CREATE:-0}") ${C_RESET}"
+# ==============================================================================
+#  DETERMINE DISPLAY MODE
+# ==============================================================================
+# Default width if not provided
+if [ -z "$TERM_WIDTH" ] || [ "$TERM_WIDTH" -lt 50 ]; then
+  TERM_WIDTH=$(tput cols 2>/dev/null || echo "120")
 fi
 
-# Line 3: Quota detail bar (if proxy active OR any provider quota > 50%)
-_SHOW_QUOTA_DETAIL=false
-
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  _SHOW_QUOTA_DETAIL=true
+# 2-line mode when width >= 80
+USE_TWO_LINES=false
+if [ "$TERM_WIDTH" -ge 80 ]; then
+  USE_TWO_LINES=true
 fi
 
-# Check if any onWatch provider data shows >50% usage
-_QUOTA_WORST=$(quota_val "summary.total_remaining_pct" "0")
-if [ -n "$_QUOTA_WORST" ] && [ "$_QUOTA_WORST" != "0" ] && [ "$_QUOTA_WORST" != "None" ]; then
-  if (( $(echo "$_QUOTA_WORST >= 50" | bc -l) )); then
-    _SHOW_QUOTA_DETAIL=true
-  fi
-fi
+# ==============================================================================
+#  RENDER
+# ==============================================================================
 
-if [ "$_SHOW_QUOTA_DETAIL" = true ]; then
-  # Build multi-provider quota detail line
-  _QUOTA_LINE="${IC_QUOTA} QUOTA:"
+if [ "$USE_TWO_LINES" = true ]; then
+  # -------------------------------------------------------
+  # 2-LINE MODE
+  # Line 1: model  project  git  context  tokens  cost  duration  effort  perm
+  # Line 2: cache  t/s  rate5/7  quota  budget  bg_tasks  compression  proxy
+  # -------------------------------------------------------
+  LEFT_PART="${SEG_MODEL}${SEG_PROXY} │ ${SEG_PROJECT}${SEG_GIT}${SEG_WORKTREE}${SEG_PR}${SEG_LINES}"
 
-  # Anthropic quota
-  if [ -n "$ANTHROPIC_5H_PCT" ] && [ "$ANTHROPIC_5H_PCT" != "" ]; then
-    _QUOTA_LINE+=" Anthropic 5h:${ANTHROPIC_5H_PCT}%"
-  fi
-  if [ -n "$ANTHROPIC_7D_PCT" ] && [ "$ANTHROPIC_7D_PCT" != "" ]; then
-    _QUOTA_LINE+="/7d:${ANTHROPIC_7D_PCT}%"
-  fi
+  # Primary line (right side)
+  L1_RIGHT="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_COST} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}"
 
-  # OpenAI quota
-  if [ -n "$OPENAI_5H_PCT" ] && [ "$OPENAI_5H_PCT" != "" ]; then
-    _QUOTA_LINE+=" │ OpenAI 5h:${OPENAI_5H_PCT}%"
+  # Secondary line (full, centered on dim bg)
+  L2_ITEMS=""
+  if [ -n "$SEG_CACHE" ]; then
+    L2_ITEMS+="${SEG_CACHE} │ "
   fi
-  if [ -n "$OPENAI_7D_PCT" ] && [ "$OPENAI_7D_PCT" != "" ]; then
-    _QUOTA_LINE+="/7d:${OPENAI_7D_PCT}%"
+  if [ -n "$SEG_SPEED" ]; then
+    L2_ITEMS+="${SEG_SPEED} │ "
   fi
-
-  # Gemini quota
-  if [ -n "$GEMINI_DAILY_PCT" ] && [ "$GEMINI_DAILY_PCT" != "" ]; then
-    _QUOTA_LINE+=" │ Gemini daily:${GEMINI_DAILY_PCT}%"
+  if [ -n "$SEG_RATE5" ]; then
+    L2_ITEMS+="${SEG_RATE5} "
   fi
-
-  # Budget
+  if [ -n "$SEG_RATE7" ]; then
+    L2_ITEMS+="${SEG_RATE7} │ "
+  fi
+  if [ -n "$SEG_QUOTA" ]; then
+    L2_ITEMS+="${SEG_QUOTA} "
+  fi
   if [ -n "$SEG_BUDGET" ]; then
-    _QUOTA_LINE+=" │ Budget:${SEG_BUDGET}"
+    L2_ITEMS+="${IC_COST}${SEG_BUDGET} │ "
   fi
-
-  # OpenAI request remaining
+  if [ -n "$SEG_BG" ]; then
+    L2_ITEMS+="${SEG_BG} │ "
+  fi
+  if [ -n "$COMP_DISPLAY" ]; then
+    L2_ITEMS+="${COMP_DISPLAY} │ "
+  fi
+  if [ -n "$SEG_PROXY" ]; then
+    L2_ITEMS+="${SEG_PROXY} │ "
+  fi
   if [ -n "$SEG_OPENAI_QUOTA" ]; then
-    _QUOTA_LINE+=" │ ${SEG_OPENAI_QUOTA}"
+    L2_ITEMS+="${SEG_OPENAI_QUOTA} "
+  fi
+  if [ -n "$SEG_VIM" ]; then
+    L2_ITEMS+="${SEG_VIM} "
   fi
 
-  # Proxy info
-  if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-    _QUOTA_LINE+=" │ ${IC_PROXY} ${PROXY_AGENT_MODEL}→${PROXY_ACTUAL_MODEL}"
-  fi
+  # Remove trailing │
+  L2_ITEMS="${L2_ITEMS% │ }"
 
-  # Choose color based on worst quota
-  _QUOTA_CLR=$(quota_color "${_QUOTA_WORST:-0}")
-  echo -e "${_QUOTA_CLR}${C_FG_BRIGHT} ${_QUOTA_LINE} ${C_RESET}"
+  # Render line 1 (full powerline bar)
+  echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${L1_RIGHT} ${C_RESET}"
+
+  # Render line 2 (dim background, secondary info)
+  if [ -n "$L2_ITEMS" ]; then
+    echo -e "${C_BG_QUOTA}${C_FG_DIM}  ${L2_ITEMS} ${C_RESET}"
+  fi
+else
+  # -------------------------------------------------------
+  # 1-LINE MODE (narrow terminal)
+  # -------------------------------------------------------
+  LEFT_PART="${SEG_MODEL}${SEG_PROXY} │ ${SEG_PROJECT}${SEG_GIT}${SEG_WORKTREE}${SEG_LINES}"
+
+  # Right side: context, tokens, cost, duration + anything that fits
+  RIGHT_PART="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_COST}${SEG_EFFORT}${SEG_DURATION}${SEG_PERM}${SEG_THINK}"
+
+  echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${RIGHT_PART} ${C_RESET}"
 fi

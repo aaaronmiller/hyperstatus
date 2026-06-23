@@ -112,7 +112,9 @@ fmt_cost() {
 fmt_duration() {
   local ms="$1"
   if [ -z "$ms" ] || [ "$ms" = "0" ]; then echo "0s"; return; fi
-  local s=$((ms / 1000)) m=$((s / 60)) h=$((m / 60))
+  local s=$((ms / 1000))
+  local m=$((s / 60))
+  local h=$((m / 60))
   if [ "$h" -gt 0 ]; then echo "${h}h${m}m"
   elif [ "$m" -gt 0 ]; then echo "${m}m"
   else echo "${s}s"; fi
@@ -153,7 +155,7 @@ if [ -z "$MODEL" ] && command -v hermes &>/dev/null; then
   MODEL=$(hermes config get model 2>/dev/null || echo "")
 fi
 if [ -n "$MODEL" ]; then
-  SHORT_MODEL=$(echo "$MODEL" | sed 's/claude-/c/' | sed 's/-202.*//' | sed 's/gpt-4o/gpt4o/' | sed 's/o4-mini/o4m')
+  SHORT_MODEL=$(echo "$MODEL" | sed "s/claude-/c/" | sed "s/-202.*//" | sed "s/gpt-4o/gpt4o/" | sed "s/o4-mini/o4m/")
 else
   SHORT_MODEL="unknown"
 fi
@@ -259,7 +261,7 @@ PROXY_ACTUAL_MODEL=$(quota_val "summary.proxy_info.actual_model" "")
 
 # Proxy model detection
 if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  PROXY_ACTUAL_SHORT=$(echo "$PROXY_ACTUAL_MODEL" | sed 's/claude-/c/' | sed 's/-202.*//' | sed 's/gpt-4o/gpt4o/' | sed 's/o4-mini/o4m')
+  PROXY_ACTUAL_SHORT=$(echo "$PROXY_ACTUAL_MODEL" | sed "s/claude-/c/" | sed "s/-202.*//" | sed "s/gpt-4o/gpt4o/" | sed "s/o4-mini/o4m/")
   SEG_PROXY=" ${IC_PROXY}${SHORT_MODEL}→${PROXY_ACTUAL_SHORT}"
   SHORT_MODEL="${SHORT_MODEL}↗"
 else
@@ -310,14 +312,18 @@ if [ -n "$OPENAI_REQ_REMAIN" ] && [ "$OPENAI_REQ_REMAIN" != "0" ] && [ "$OPENAI_
   SEG_OPENAI_QUOTA=" OAI:${OPENAI_REQ_REMAIN}req"
 fi
 
-# --- Build status bar ---
+# --- Width detection ---
+COLS=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
+
+# --- Build status bar segments ---
 CTX_CLR=$(ctx_color "${CTX_PCT:-0}")
 BAR=$(ctx_bar "${CTX_PCT:-0}")
 
-# LEFT: model | proxy | project | branch | git status | worktree | lines | compression
+# Model segment
 SEG_MODEL="${IC_MODEL} ${SHORT_MODEL}"
 SEG_PROJECT="${IC_DIR} ${PROJECT_DISPLAY}"
 
+# Git segment
 if [ -n "$GIT_BRANCH" ]; then
   SEG_GIT=" ${IC_BRANCH} ${GIT_BRANCH}"
   if [ "$GIT_STAGED" -ne 0 ] || [ "$GIT_UNSTAGED" -ne 0 ] || [ "$GIT_UNTRACKED" -ne 0 ]; then
@@ -337,9 +343,7 @@ if [ "$LINES_ADD" -ne 0 ] || [ "$LINES_REM" -ne 0 ]; then
   SEG_LINES=" +${LINES_ADD}/-${LINES_REM}"
 fi
 
-LEFT_PART="${SEG_MODEL}${SEG_PROXY} │ ${SEG_PROJECT}${SEG_GIT}${SEG_WORKTREE}${SEG_LINES}${COMP_DISPLAY}"
-
-# RIGHT: context% | tokens | cache | cost | speed | quota/rate | budget | duration | effort | think | perm | bg | compress
+# RIGHT/LINE2 segments: context% | tokens | cache | cost | speed | rates/quota | budget | duration | effort | think | perm | bg | compress
 CTX_PCT_FMT=$(printf "%5.1f" "${CTX_PCT:-0}")
 SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%%"
 
@@ -433,57 +437,32 @@ if [ "$COMPRESS_COUNT" -gt 0 ]; then
   SEG_COMP_N=" ${IC_COMPRESS}${COMPRESS_COUNT}"
 fi
 
-# Assemble
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  RIGHT_PART="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_CACHE} │ ${SEG_COST}${SEG_SPEED} │ ${SEG_QUOTA}${SEG_BUDGET}${SEG_OPENAI_QUOTA} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}${SEG_BG}${SEG_COMP_N}"
-else
-  RIGHT_PART="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_CACHE} │ ${SEG_COST}${SEG_SPEED} │ ${SEG_RATE5}${SEG_RATE7}${SEG_BUDGET}${SEG_OPENAI_QUOTA} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}${SEG_BG}${SEG_COMP_N}"
-fi
+# =============================================================================
+#  RENDER
+# =============================================================================
+if [ "$COLS" -ge 80 ]; then
+  # ====== 2-LINE MODE (wide terminal) ======
 
-# --- RENDER ---
-echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${RIGHT_PART} ${C_RESET}"
+  # Line 1 (Primary — teal bg): model | project | git | context% | tokens | cost | duration | effort | perm
+  L1_LEFT="${SEG_MODEL}${SEG_LINES} │ ${SEG_PROJECT}${SEG_GIT}"
+  L1_RIGHT="${SEG_CTX} │ ${SEG_TOKENS} │ ${SEG_COST} │ ${SEG_DURATION}${SEG_EFFORT}${SEG_THINK}${SEG_PERM}"
 
-# Line 2 when context > 50%
-if (( $(echo "${CTX_PCT:-0} >= 50" | bc -l) )); then
-  CTX_REMAINING=$(echo "100 - ${CTX_PCT:-0}" | bc)
-  echo -e "${CTX_CLR}${C_FG_BRIGHT} ${IC_CTX} CONTEXT: $(fmt_tokens "${INPUT_TOKENS:-0}") in / $(fmt_tokens "${CTX_SIZE:-0}") max │ Remaining: ${CTX_REMAINING}% │ Output: $(fmt_tokens "${OUTPUT_TOKENS:-0}") │ Cache R: $(fmt_tokens "${CACHE_READ:-0}") / Cache W: $(fmt_tokens "${CACHE_CREATE:-0}") ${C_RESET}"
-fi
+  echo -e "${C_BG}${C_FG_BRIGHT} ${L1_LEFT} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${L1_RIGHT} ${C_RESET}"
 
-# Line 3: Quota detail (if proxy active or any provider > 50%)
-_SHOW_QUOTA_DETAIL=false
-if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-  _SHOW_QUOTA_DETAIL=true
-fi
-_QUOTA_WORST=$(quota_val "summary.total_remaining_pct" "0")
-if [ -n "$_QUOTA_WORST" ] && [ "$_QUOTA_WORST" != "0" ] && [ "$_QUOTA_WORST" != "None" ]; then
-  if (( $(echo "$_QUOTA_WORST >= 50" | bc -l) )); then
-    _SHOW_QUOTA_DETAIL=true
-  fi
-fi
-
-if [ "$_SHOW_QUOTA_DETAIL" = true ]; then
-  _QUOTA_LINE="${IC_QUOTA} QUOTA:"
-  if [ -n "$ANTHROPIC_5H_PCT" ] && [ "$ANTHROPIC_5H_PCT" != "" ]; then
-    _QUOTA_LINE+=" Anthropic 5h:${ANTHROPIC_5H_PCT}%"
-  fi
-  if [ -n "$ANTHROPIC_7D_PCT" ] && [ "$ANTHROPIC_7D_PCT" != "" ]; then
-    _QUOTA_LINE+="/7d:${ANTHROPIC_7D_PCT}%"
-  fi
-  if [ -n "$OPENAI_5H_PCT" ] && [ "$OPENAI_5H_PCT" != "" ]; then
-    _QUOTA_LINE+=" │ OpenAI 5h:${OPENAI_5H_PCT}%"
-  fi
-  if [ -n "$OPENAI_7D_PCT" ] && [ "$OPENAI_7D_PCT" != "" ]; then
-    _QUOTA_LINE+="/7d:${OPENAI_7D_PCT}%"
-  fi
-  if [ -n "$GEMINI_DAILY_PCT" ] && [ "$GEMINI_DAILY_PCT" != "" ]; then
-    _QUOTA_LINE+=" │ Gemini daily:${GEMINI_DAILY_PCT}%"
-  fi
-  if [ -n "$SEG_BUDGET" ]; then
-    _QUOTA_LINE+=" │ Budget:${SEG_BUDGET}"
-  fi
+  # Line 2 (Secondary — mauve/dim bg): cache% | throughput | rates/quota | budget | bg_tasks | compress | worktree | proxy
+  L2_LEFT="${SEG_CACHE}${SEG_SPEED}${COMP_DISPLAY}"
   if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; then
-    _QUOTA_LINE+=" │ ${IC_PROXY} ${PROXY_AGENT_MODEL}→${PROXY_ACTUAL_MODEL}"
+    L2_RIGHT="${SEG_QUOTA}${SEG_BUDGET}${SEG_OPENAI_QUOTA}${SEG_BG}${SEG_COMP_N}${SEG_WORKTREE}${SEG_PROXY}"
+  else
+    L2_RIGHT="${SEG_RATE5}${SEG_RATE7}${SEG_BUDGET}${SEG_OPENAI_QUOTA}${SEG_BG}${SEG_COMP_N}${SEG_WORKTREE}"
   fi
-  _QUOTA_CLR=$(quota_color "${_QUOTA_WORST:-0}")
-  echo -e "${_QUOTA_CLR}${C_FG_BRIGHT} ${_QUOTA_LINE} ${C_RESET}"
+  # Remove leading space for cleaner look
+  L2_RIGHT="${L2_RIGHT# }"
+
+  echo -e "${C_BG3}${C_FG_DIM} ${L2_LEFT} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG_QUOTA}${C_FG} ${L2_RIGHT} ${C_RESET}"
+else
+  # ====== NARROW MODE (<80 cols) ======
+  NARROW_LEFT="${IC_MODEL} ${SHORT_MODEL}${SEG_PROXY} │ ${IC_DIR} ${PROJECT_DISPLAY}${SEG_GIT}"
+  NARROW_RIGHT="${IC_CTX} ${CTX_PCT_FMT}%%${SEG_SPEED} │ ${IC_COST} ${COST_FMT} │ ${IC_TIME} ${DUR_FMT}"
+  echo -e "${C_BG}${C_FG_BRIGHT} ${NARROW_LEFT} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${NARROW_RIGHT} ${C_RESET}"
 fi

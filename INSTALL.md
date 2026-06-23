@@ -15,17 +15,19 @@
    - [Codex CLI](#32-codex-cli)
    - [Hermes Agent](#33-hermes-agent)
    - [Pi Agent](#34-pi-agent)
-4. [Headroom Compression Integration](#4-headroom-compression-integration)
-5. [RTK Terminal Compression Integration](#5-rtk-terminal-compression-integration)
-6. [Quota Tracking Setup](#6-quota-tracking-setup)
+   - [Antigravity CLI](#35-antigravity-cli)
+4. [2-Line Display Mode](#-2-line-display-mode)
+5. [Headroom Compression Integration](#4-headroom-compression-integration)
+6. [RTK Terminal Compression Integration](#5-rtk-terminal-compression-integration)
+7. [Quota Tracking Setup](#6-quota-tracking-setup)
    - [onWatch](#61-onwatch-daemon)
    - [ccusage](#62-ccusage-cli)
    - [LiteLLM Proxy](#63-litellm-proxy)
    - [LLM-API-Key-Proxy](#64-llm-api-key-proxy)
-7. [Proxy Model Detection](#7-proxy-model-detection)
-8. [Environment Variables Reference](#8-environment-variables-reference)
-9. [Architecture & Data Flow](#9-architecture--data-flow)
-10. [Troubleshooting](#10-troubleshooting)
+8. [Proxy Model Detection](#7-proxy-model-detection)
+9. [Environment Variables Reference](#8-environment-variables-reference)
+10. [Architecture & Data Flow](#9-architecture--data-flow)
+11. [Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -227,7 +229,9 @@ The `export_env` section tells the Hermes gateway to export these as environment
 
 ### 3.4 Pi Agent
 
-Pi uses a TypeScript extension API with full rendering control over `StatusBarSegment` objects.
+Pi uses a TypeScript extension API (`@earendil-works/pi-coding-agent` v0.79.9+).
+Hyperstatus replaces the built-in footer with a custom powerline-style status bar
+via `ctx.ui.setFooter()`.
 
 #### Automatic Install
 
@@ -240,32 +244,84 @@ Pi uses a TypeScript extension API with full rendering control over `StatusBarSe
 1. Create the extension directory:
 
 ```bash
-mkdir -p ~/.pi/extensions/hyperstatus
+mkdir -p ~/.pi/agent/extensions/hyperstatus
 ```
 
 2. Copy the extension files:
 
 ```bash
-cp pi/hyperstatus-extension.ts ~/.pi/extensions/hyperstatus/index.ts
-cp pi/powerline-config.ts ~/.pi/extensions/hyperstatus/powerline-config.ts
+cp pi/hyperstatus-extension.ts ~/.pi/agent/extensions/hyperstatus/index.ts
+cp pi/powerline-config.ts ~/.pi/agent/extensions/hyperstatus/powerline-config.ts
 ```
 
-3. Create `~/.pi/extensions/hyperstatus/package.json`:
+3. Create `~/.pi/agent/extensions/hyperstatus/package.json`:
 
 ```json
 {
   "name": "hyperstatus",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Powerline-style status bar with full metric coverage + quota",
   "main": "index.ts",
-  "piExtension": true,
-  "permissions": ["statusbar", "filesystem", "network"]
+  "piExtension": true
 }
 ```
 
 4. Reload Pi: type `/reload` in the Pi agent CLI.
 
 The extension automatically polls `/tmp/hyperstatus-quota.json` every 30 seconds for quota data.
+
+---
+
+### 3.5 Antigravity CLI
+
+Antigravity CLI uses the same `statusLine` JSON-on-stdin protocol as Claude Code. HyperStatus v3.2 adds full Antigravity support with model, context, token, git, agent state, and plan tier display.
+
+#### Automatic Install
+
+```bash
+./scripts/setup.sh install antigravity
+```
+
+#### Manual Install
+
+1. Create the config directory:
+
+```bash
+mkdir -p ~/.config/antigravity-cli
+```
+
+2. Copy the status bar script:
+
+```bash
+cp antigravity/statusline.sh ~/.config/antigravity-cli/statusline.sh
+chmod +x ~/.config/antigravity-cli/statusline.sh
+```
+
+3. Create `~/.config/antigravity-cli/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "~/.config/antigravity-cli/statusline.sh"
+  }
+}
+```
+
+---
+
+## 🖥️ 2-Line Display Mode
+
+HyperStatus v3.2 introduces **intelligent 2-line rendering** for all supported agents. When the terminal is ≥80 columns wide, the status bar splits into two rows:
+
+| Line | Background | Contents |
+|------|------------|----------|
+| **Line 1** | Deep teal | Model, project, git branch, context bar + %, tokens/capacity, cost, duration, effort, permission |
+| **Line 2** | Mauve/dim | Cache hit %, throughput t/s, rate limit 5h/7d %, budget remaining, background tasks, compression savings, worktree, proxy model swap info |
+
+When terminal width falls below 80 columns, all agents gracefully fall back to a compact **single-line** layout.
+
+No configuration needed — it's automatic based on terminal width.
 
 ---
 

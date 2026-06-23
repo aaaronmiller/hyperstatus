@@ -128,7 +128,9 @@ backup_claude() {
   
   # Backup any other custom scripts
   for f in "${claude_dir}/"*.sh; do
-    [ -f "$f" ] && cp "$f" "${BACKUP_DIR}/claude/" && log_success "Backed up $(basename "$f")"
+    if [ -f "$f" ]; then
+      cp "$f" "${BACKUP_DIR}/claude/" && log_success "Backed up $(basename "$f")"
+    fi
   done
 }
 
@@ -628,7 +630,7 @@ main() {
       fi
       
       # Pi
-      if [ -d "${HOME_DIR}/.pi/extensions/hyperstatus" ]; then
+      if [ -d "${HOME_DIR}/.pi/extensions/hyperstatus" ] || [ -d "${HOME_DIR}/.pi/agent/extensions/hyperstatus" ]; then
         log_success "Pi Agent: HyperStatus extension installed"
       else
         log_info "Pi Agent: Not configured"
