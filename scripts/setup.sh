@@ -98,6 +98,17 @@ detect_agents() {
     log_warn "Pi Agent not found"
   fi
   
+  # Antigravity CLI
+  if command -v agy &>/dev/null; then
+    AGENTS_FOUND+=("antigravity")
+    log_success "Antigravity CLI detected"
+  elif [ -d "${HOME_DIR}/.gemini/antigravity-cli" ]; then
+    AGENTS_FOUND+=("antigravity")
+    log_success "Antigravity CLI config found at ${HOME_DIR}/.gemini/antigravity-cli/"
+  else
+    log_warn "Antigravity CLI not found"
+  fi
+  
   if [ ${#AGENTS_FOUND[@]} -eq 0 ]; then
     log_error "No coding agent CLI tools detected!"
     log_info "You can still install configurations for future use."
@@ -187,6 +198,28 @@ backup_pi() {
     mkdir -p "${BACKUP_DIR}/pi/agent/extensions/"
     cp -r "${pi_dir}/agent/extensions/hyperstatus" "${BACKUP_DIR}/pi/agent/extensions/"
     log_success "Backed up pi/agent/extensions/hyperstatus/"
+  fi
+}
+
+backup_antigravity() {
+  local ag_dir="${HOME_DIR}/.gemini/antigravity-cli"
+  if [ ! -d "$ag_dir" ]; then
+    log_warn "No Antigravity CLI directory to backup"
+    return 0
+  fi
+  
+  mkdir -p "${BACKUP_DIR}/antigravity"
+  
+  # Backup settings.json
+  if [ -f "${ag_dir}/settings.json" ]; then
+    cp "${ag_dir}/settings.json" "${BACKUP_DIR}/antigravity/settings.json"
+    log_success "Backed up antigravity/settings.json"
+  fi
+  
+  # Backup existing statusline script
+  if [ -f "${ag_dir}/statusline.sh" ]; then
+    cp "${ag_dir}/statusline.sh" "${BACKUP_DIR}/antigravity/statusline.sh"
+    log_success "Backed up antigravity/statusline.sh"
   fi
 }
 
@@ -307,6 +340,57 @@ PKGJSON
   log_info "Run /reload in Pi to activate the extension"
 }
 
+install_antigravity() {
+  log "${BOLD}Installing HyperStatus for Antigravity CLI...${RESET}"
+  
+  local ag_dir="${HOME_DIR}/.gemini/antigravity-cli"
+  mkdir -p "$ag_dir"
+  
+  # Install statusline script
+  cp "${SCRIPT_DIR}/../antigravity/statusline.sh" "${ag_dir}/statusline.sh"
+  chmod +x "${ag_dir}/statusline.sh"
+  log_success "Installed statusline.sh to ${ag_dir}/"
+  
+  # Merge settings.json (preserve existing settings, add/update statusLine)
+  local settings_file="${ag_dir}/settings.json"
+  if [ -f "$settings_file" ]; then
+    # Use python3 to merge JSON safely
+    python3 -c "
+import json, sys
+with open('$settings_file', 'r') as f:
+    existing = json.load(f)
+existing['statusLine'] = {
+    'type': 'command',
+    'command': '${ag_dir}/statusline.sh'
+}
+with open('$settings_file', 'w') as f:
+    json.dump(existing, f, indent=2)
+print('Merged statusLine into existing settings.json')
+" 2>/dev/null && log_success "Merged statusLine config into settings.json" || {
+      log_warn "Could not merge settings.json automatically"
+      log_info "Manually add statusLine to ${settings_file}"
+    }
+  else
+    cat > "$settings_file" << EOF
+{
+  "statusLine": {
+    "type": "command",
+    "command": "${ag_dir}/statusline.sh"
+  }
+}
+EOF
+    log_success "Created new settings.json"
+  fi
+  
+  # Verify
+  if [ -f "${ag_dir}/statusline.sh" ] && [ -x "${ag_dir}/statusline.sh" ]; then
+    log_success "Antigravity CLI HyperStatus installed!"
+  else
+    log_error "Installation verification failed"
+    return 1
+  fi
+}
+
 # --- Restore Functions ---
 restore_claude() {
   local backup_path="${1:-}"
@@ -369,6 +453,21 @@ restore_pi() {
     log_success "Restored Pi Agent from backup"
   else
     log_error "No Pi Agent backup found at ${backup_path}"
+  fi
+}
+
+restore_antigravity() {
+  local backup_path="${1:-}"
+  if [ -z "$backup_path" ]; then
+    log_error "No backup path specified"
+    return 1
+  fi
+  
+  if [ -d "${backup_path}/antigravity" ]; then
+    cp -r "${backup_path}/antigravity/"* "${HOME_DIR}/.gemini/antigravity-cli/"
+    log_success "Restored Antigravity CLI from backup"
+  else
+    log_error "No Antigravity CLI backup found at ${backup_path}"
   fi
 }
 
@@ -456,11 +555,12 @@ Commands:
   status     Show current installation status
 
 Targets:
-  claude     Claude Code only
-  codex      Codex CLI only
-  hermes     Hermes Agent only
-  pi         Pi Agent only
-  all        All detected agents
+  claude       Claude Code only
+  codex        Codex CLI only
+  hermes       Hermes Agent only
+  pi           Pi Agent only
+  antigravity  Antigravity CLI only
+  all          All detected agents
 
 Options:
   --force    Overwrite existing configurations without prompt
@@ -512,6 +612,7 @@ main() {
         backup_codex
         backup_hermes
         backup_pi
+        backup_antigravity
         log_success "Backups saved to ${BACKUP_DIR}"
       fi
       
@@ -521,6 +622,7 @@ main() {
         codex) install_codex ;;
         hermes) install_hermes ;;
         pi) install_pi ;;
+        antigravity) install_antigravity ;;
         all)
           for agent in "${AGENTS_FOUND[@]:-}"; do
             "install_${agent}" 2>/dev/null || log_warn "Install for $agent skipped"
@@ -532,6 +634,7 @@ main() {
             install_codex
             install_hermes
             install_pi
+            install_antigravity
           fi
           ;;
         *)
@@ -556,11 +659,13 @@ main() {
         codex) backup_codex ;;
         hermes) backup_hermes ;;
         pi) backup_pi ;;
+        antigravity) backup_antigravity ;;
         all)
           backup_claude
           backup_codex
           backup_hermes
           backup_pi
+          backup_antigravity
           ;;
       esac
       log_success "Backups saved to ${BACKUP_DIR}"
@@ -582,11 +687,13 @@ main() {
         codex) restore_codex "$restore_path" ;;
         hermes) restore_hermes "$restore_path" ;;
         pi) restore_pi "$restore_path" ;;
+        antigravity) restore_antigravity "$restore_path" ;;
         all)
           restore_claude "$restore_path"
           restore_codex "$restore_path"
           restore_hermes "$restore_path"
           restore_pi "$restore_path"
+          restore_antigravity "$restore_path"
           ;;
       esac
       log_success "Restore complete!"
@@ -634,6 +741,15 @@ main() {
         log_success "Pi Agent: HyperStatus extension installed"
       else
         log_info "Pi Agent: Not configured"
+      fi
+      
+      # Antigravity CLI
+      if [ -f "${HOME_DIR}/.gemini/antigravity-cli/statusline.sh" ]; then
+        log_success "Antigravity CLI: HyperStatus installed"
+      elif [ -f "${HOME_DIR}/.gemini/antigravity-cli/settings.json" ]; then
+        log_warn "Antigravity CLI: Custom settings exist, no HyperStatus"
+      else
+        log_info "Antigravity CLI: Not configured"
       fi
       
       # Backups
