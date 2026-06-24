@@ -356,8 +356,7 @@ CTX_PCT_FMT=$(printf "%5.1f" "${CTX_PCT:-0}")
 SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%%"
 
 TOTAL_FMT=$(fmt_tokens "${TOTAL_TOKENS:-0}")
-CTX_SIZE_FMT=$(fmt_tokens "${CTX_SIZE:-0}")
-SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}/${CTX_SIZE_FMT}"
+SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}"
 
 CACHE_PCT_FMT=$(printf "%3d" "${CACHE_PCT:-0}")
 SEG_CACHE="${IC_CACHE} ${CACHE_PCT_FMT}%%"

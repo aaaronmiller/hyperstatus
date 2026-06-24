@@ -9,3 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Integrated Antigravity CLI status bar support into `scripts/setup.sh` (automatic detection, installation, backup, and restore).
+
+### Changed
+- Removed redundant context window absolute capacity display from all agent status bars (Claude Code, Codex CLI, Hermes, Pi, Antigravity) to avoid redundancy with the percentage display.

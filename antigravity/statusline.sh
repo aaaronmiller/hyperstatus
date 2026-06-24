@@ -231,8 +231,7 @@ SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%%"
 
 # Tokens
 TOTAL_FMT=$(fmt_tokens "${TOTAL_TOKENS:-0}")
-CTX_SIZE_FMT=$(fmt_tokens "${CTX_SIZE:-0}")
-SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}/${CTX_SIZE_FMT}"
+SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}"
 
 # Cache
 SEG_CACHE=""
