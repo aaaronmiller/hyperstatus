@@ -283,25 +283,27 @@ install_pi() {
   
   # Pi loads extensions from ~/.pi/agent/extensions/
   local ext_dir="${HOME_DIR}/.pi/agent/extensions/hyperstatus"
+  local pi_src; pi_src="$(cd "${SCRIPT_DIR}/../pi" && pwd)"
   mkdir -p "$ext_dir"
-  
-  # Copy extension files
-  cp "${SCRIPT_DIR}/../pi/hyperstatus-extension.ts" "${ext_dir}/index.ts"
-  cp "${SCRIPT_DIR}/../pi/powerline-config.ts" "${ext_dir}/powerline-config.ts"
-  
+
+  # Symlink extension files back to the repo so edits in /code propagate live
+  # (ln -sf to absolute repo paths; re-runnable / idempotent).
+  ln -sf "${pi_src}/hyperstatus-extension.ts" "${ext_dir}/index.ts"
+  ln -sf "${pi_src}/powerline-config.ts" "${ext_dir}/powerline-config.ts"
+
   # Create package.json for the extension
   cat > "${ext_dir}/package.json" << 'PKGJSON'
 {
   "name": "hyperstatus",
-  "version": "3.0.0",
-  "description": "Powerline-style status bar with full metric coverage + quota",
+  "version": "4.0.0",
+  "description": "Powerline-style status footer (pi >=0.79 setFooter API) with full metric coverage + quota",
   "main": "index.ts",
   "piExtension": true,
   "permissions": ["statusbar", "filesystem", "network"]
 }
 PKGJSON
-  
-  log_success "Installed Pi extension to ${ext_dir}/"
+
+  log_success "Symlinked Pi extension to ${ext_dir}/ (tracks ${pi_src})"
   log_info "Run /reload in Pi to activate the extension"
 }
 

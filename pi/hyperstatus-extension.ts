@@ -1,16 +1,22 @@
 /**
  * ============================================================================
- *  HYPERSTATUS v3.0 — Pi Agent Status Bar Extension
- *  Powerline-style status bar with full metric coverage + QUOTA integration
- *  Install: Copy to ~/.pi/extensions/hyperstatus/
+ *  HYPERSTATUS v4.0 — Pi Agent Status Bar Extension
+ *  Powerline-style footer with full metric coverage + QUOTA integration
+ *  Install: Copy to ~/.pi/agent/extensions/hyperstatus/
  *
- *  v3.0 NEW: Multi-provider quota display from onWatch/ccusage/LiteLLM,
- *  proxy model detection, and dual quota when proxy swaps models.
+ *  v4.0: Ported from the removed class-based `@pi/core` StatusBar API to the
+ *  pi >=0.79 function-based ExtensionAPI (`pi.setFooter`). Renders a truecolor
+ *  powerline footer. All metrics are sourced from the live session — no
+ *  fabricated values. Segments the new API does not expose (per-turn
+ *  throughput, agent-side effort/thinking/rate limits) are omitted rather
+ *  than faked; rate/budget data still comes from the external quota file.
  * ============================================================================
  */
 
-import { Extension, StatusBarSegment, StatusBarConfig } from "@pi/core";
-import { PowerlineSeparator, PowerlineConfig } from "./powerline-config";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defaultConfig } from "./powerline-config";
+
+const SEP = defaultConfig.separator; // right "", left ""
 
 // --- Color Palette (Catppuccin Mocha) ---
 const PALETTE = {
@@ -34,541 +40,385 @@ const PALETTE = {
   red: "#f38ba8",
   mauve: "#cba6f7",
   pink: "#f5c2e7",
-  quota: "#9370db",      // Medium purple for quota segments
-  proxy: "#7c3aed",      // Violet for proxy segments
+  quota: "#9370db",
+  proxy: "#7c3aed",
 };
 
 // --- Nerd Font Icon Constants ---
 const ICON = {
-  model: "\ue716",
-  context: "\uf6cf",
-  tokens: "\uf1c9",
-  cost: "\uf155",
-  duration: "\uf017",
-  compression: "\uf410",
-  bgTasks: "\uf44e",
-  cache: "\uf021",
-  git: "\ue725",
-  branch: "\uf418",
-  latency: "\uf9ee",
-  effort: "\uf58c",
-  dir: "\uf07b",
-  think: "\uf7b4",
-  perm: "\uf132",
-  pr: "\ue728",
-  worktree: "\uf77a",
-  rate: "\uf252",
-  speed: "\uf9ee",
-  session: "\uf2db",
-  quota: "\uf0ec",       //  Gauge/quota icon
-  proxy: "\uf6ff",       //  Proxy/swap icon
-  provider: "\uf1c0",    //  Database/provider icon
-  warn: "\uf071",        //  Warning triangle
+  model: "",
+  context: "",
+  tokens: "",
+  cost: "",
+  duration: "",
+  compression: "",
+  cache: "",
+  branch: "",
+  rate: "",
+  dir: "",
+  quota: "",
+  proxy: "",
+  provider: "",
+  warn: "",
 };
 
-// --- Context Threshold Colors ---
+// ---------------------------------------------------------------------------
+//  ANSI truecolor helpers
+// ---------------------------------------------------------------------------
+const RESET = "\x1b[0m";
+
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
+}
+function fgAnsi(hex: string): string {
+  const [r, g, b] = hexToRgb(hex);
+  return `\x1b[38;2;${r};${g};${b}m`;
+}
+function bgAnsi(hex: string): string {
+  const [r, g, b] = hexToRgb(hex);
+  return `\x1b[48;2;${r};${g};${b}m`;
+}
+/** Visible width: strip ANSI SGR sequences, count remaining code points. */
+function visibleWidth(s: string): number {
+  // eslint-disable-next-line no-control-regex
+  return Array.from(s.replace(/\x1b\[[0-9;]*m/g, "")).length;
+}
+
+// ---------------------------------------------------------------------------
+//  Formatters / thresholds
+// ---------------------------------------------------------------------------
 function contextColor(pct: number): string {
   if (pct >= 95) return PALETTE.red;
   if (pct >= 80) return PALETTE.peach;
   if (pct >= 50) return PALETTE.yellow;
   return PALETTE.green;
 }
-
-// --- Quota Threshold Colors (high usage = bad) ---
 function quotaColor(usedPct: number): string {
   if (usedPct >= 95) return PALETTE.red;
   if (usedPct >= 80) return PALETTE.peach;
   if (usedPct >= 50) return PALETTE.yellow;
   return PALETTE.quota;
 }
-
-// --- Context Progress Bar ---
-function contextBar(pct: number, width: number = 10): string {
-  const filled = Math.round((pct / 100) * width);
-  const empty = width - filled;
-  return "█".repeat(filled) + "░".repeat(empty);
+function contextBar(pct: number, width = 8): string {
+  const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)));
+  return "█".repeat(filled) + "░".repeat(width - filled);
 }
-
-// --- Format Tokens ---
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return `${n}`;
 }
-
-// --- Format Cost ---
 function fmtCost(c: number): string {
   return `$${c.toFixed(2)}`;
 }
 
-// --- Format Duration ---
-function fmtDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const m = Math.floor(s / 60);
-  const h = Math.floor(m / 60);
-  if (h > 0) return `${h}h${m % 60}m`;
-  if (m > 0) return `${m}m`;
-  return `${s}s`;
-}
-
-// --- Compression Metrics Interface ---
-interface CompressionMetrics {
-  headroomTokensSaved?: number;
-  headroomRatio?: number;
-  rtkTokensSaved?: number;
-  rtkEfficiency?: number;
-}
-
-// --- Quota Data Interface ---
+// ---------------------------------------------------------------------------
+//  External state (quota + compression) — read from files written by daemons
+// ---------------------------------------------------------------------------
 interface ProviderQuota {
-  // onWatch data
   "5h_used_pct"?: number;
   "7d_used_pct"?: number;
   "daily_used_pct"?: number;
-  "5h_remaining"?: number;
-  "7d_remaining"?: number;
-  "5h_total"?: number;
-  "7d_total"?: number;
-  // LiteLLM data
-  budget_used_pct?: number;
   budget_remaining_usd?: number;
-  budget_total_usd?: number;
-  // ccusage data
-  ccusage_cost?: number;
-  ccusage_input_tokens?: number;
-  ccusage_output_tokens?: number;
-  // LLM-API-Key-Proxy
-  proxy_requests?: number;
-  proxy_errors?: number;
-  proxy_cooldown?: boolean;
 }
-
 interface ProxyInfo {
   model_swapped: boolean;
   agent_model: string;
   actual_model: string;
 }
-
 interface QuotaState {
   providers: Record<string, ProviderQuota>;
   warnings: string[];
   proxy_info: ProxyInfo | null;
   total_remaining_pct: number | null;
 }
+interface CompressionMetrics {
+  headroomTokensSaved?: number;
+  rtkTokensSaved?: number;
+}
 
-// --- Main Status Bar Extension ---
-export default class HyperStatusExtension extends Extension {
-  name = "hyperstatus";
-  version = "3.0.0";
-  description = "Powerline-style status bar with full metric coverage + quota";
+const QUOTA_FILE =
+  process.env.HYPERSTATUS_QUOTA_STATE || "/tmp/hyperstatus-quota.json";
+const RTK_FILE = process.env.RTK_METRICS_FILE || "/tmp/rtk-metrics.json";
 
-  private compression: CompressionMetrics = {};
-  private quotaState: QuotaState | null = null;
-  private quotaFile = process.env.HYPERSTATUS_QUOTA_STATE || "/tmp/hyperstatus-quota.json";
+async function readJson(path: string): Promise<any | null> {
+  try {
+    const fs = await import("node:fs/promises");
+    return JSON.parse(await fs.readFile(path, "utf-8"));
+  } catch {
+    return null;
+  }
+}
 
-  /**
-   * Read quota state from shared JSON file
-   * Updated by quota-fetch.sh daemon running in background
-   */
-  private async readQuotaState(): Promise<void> {
-    try {
-      const fs = await import("fs/promises");
-      const data = await fs.readFile(this.quotaFile, "utf-8");
-      const parsed = JSON.parse(data);
-      this.quotaState = parsed.summary || null;
-    } catch {
-      // File doesn't exist or is invalid — no quota data available
-      this.quotaState = null;
+// ---------------------------------------------------------------------------
+//  Segment model + powerline renderer
+// ---------------------------------------------------------------------------
+interface Segment {
+  icon: string;
+  text: string;
+  bg: string;
+  fg: string;
+}
+
+function renderSeg(s: Segment): string {
+  return `${bgAnsi(s.bg)}${fgAnsi(s.fg)} ${s.icon} ${s.text} ${RESET}`;
+}
+
+/** Left-aligned powerline: segments separated by right-facing arrows. */
+function renderLeft(segs: Segment[]): string {
+  let out = "";
+  for (let i = 0; i < segs.length; i++) {
+    out += renderSeg(segs[i]);
+    const nextBg = i + 1 < segs.length ? segs[i + 1].bg : null;
+    if (nextBg) {
+      out += `${bgAnsi(nextBg)}${fgAnsi(segs[i].bg)}${SEP.right}${RESET}`;
+    } else {
+      out += `${fgAnsi(segs[i].bg)}${SEP.right}${RESET}`;
     }
   }
+  return out;
+}
 
-  /**
-   * Build the status bar segments
-   * LEFT: Variable-width items (model, project, branch, proxy, compression)
-   * RIGHT: Fixed-width items (context, tokens, cache, cost, quota, duration)
-   */
-  async buildStatusBar(ctx: any): Promise<StatusBarSegment[]> {
-    // Refresh quota data
-    await this.readQuotaState();
+/** Right-aligned powerline: segments separated by left-facing arrows. */
+function renderRight(segs: Segment[]): string {
+  let out = "";
+  for (let i = 0; i < segs.length; i++) {
+    out += `${fgAnsi(segs[i].bg)}${SEP.left}${RESET}`;
+    out += renderSeg(segs[i]);
+  }
+  return out;
+}
 
-    const segments: StatusBarSegment[] = [];
-    const proxyInfo = this.quotaState?.proxy_info;
-    const modelSwapped = proxyInfo?.model_swapped ?? false;
+// ---------------------------------------------------------------------------
+//  Token/cost aggregation from the live session branch
+// ---------------------------------------------------------------------------
+function aggregateUsage(ctx: any): {
+  input: number;
+  output: number;
+  cost: number;
+  cacheRead: number;
+} {
+  let input = 0,
+    output = 0,
+    cost = 0,
+    cacheRead = 0;
+  try {
+    for (const e of ctx.sessionManager.getBranch()) {
+      if (e.type === "message" && e.message?.role === "assistant") {
+        const u = e.message.usage;
+        if (!u) continue;
+        input += u.input ?? 0;
+        output += u.output ?? 0;
+        cost += u.cost?.total ?? 0;
+        // cache field name varies across providers — read defensively, show only if present
+        cacheRead +=
+          u.cacheRead ?? u.cache_read ?? u.cacheReadTokens ?? u.cache?.read ?? 0;
+      }
+    }
+  } catch {
+    /* session not ready */
+  }
+  return { input, output, cost, cacheRead };
+}
 
-    // ====== LEFT SIDE (variable-width) ======
+// ---------------------------------------------------------------------------
+//  Build the full footer line for a given terminal width
+// ---------------------------------------------------------------------------
+function buildLine(
+  ctx: any,
+  footerData: any,
+  width: number,
+  quotaState: QuotaState | null,
+  compression: CompressionMetrics
+): string {
+  const left: Segment[] = [];
+  const right: Segment[] = [];
 
-    // Model (with proxy indicator if model is swapped)
-    const model = ctx.model?.display_name || "unknown";
-    let shortModel = model
+  const proxyInfo = quotaState?.proxy_info ?? null;
+  const modelSwapped = proxyInfo?.model_swapped ?? false;
+
+  // --- LEFT: model (+ proxy redirect) ---
+  const modelId = ctx.model?.id || "no-model";
+  const shortModel = modelId.replace("claude-", "c").replace(/-202.*/, "");
+  left.push({ icon: ICON.model, text: shortModel, bg: PALETTE.surface1, fg: PALETTE.lavender });
+  if (modelSwapped && proxyInfo) {
+    const actualShort = proxyInfo.actual_model
       .replace("claude-", "c")
-      .replace(/-202.*/, "");
-    let modelBg = PALETTE.surface1;
-    let modelFg = PALETTE.lavender;
+      .replace(/-202.*/, "")
+      .replace("gpt-4o", "gpt4o")
+      .replace("o4-mini", "o4m");
+    left.push({ icon: ICON.proxy, text: `→${actualShort}`, bg: PALETTE.proxy, fg: PALETTE.text });
+  }
 
-    if (modelSwapped && proxyInfo) {
-      const actualShort = proxyInfo.actual_model
-        .replace("claude-", "c")
-        .replace(/-202.*/, "")
-        .replace("gpt-4o", "gpt4o")
-        .replace("o4-mini", "o4m");
+  // --- LEFT: project dir ---
+  const project = (ctx.cwd || "").split("/").filter(Boolean).pop() || "~";
+  left.push({ icon: ICON.dir, text: project, bg: PALETTE.surface0, fg: PALETTE.text });
 
-      // Show proxy redirect: agent model → actual model
-      segments.push({
-        icon: ICON.model,
-        text: shortModel,
-        bg: modelBg,
-        fg: modelFg,
-        side: "left",
-      });
-      segments.push({
-        icon: ICON.proxy,
-        text: `→${actualShort}`,
-        bg: PALETTE.proxy,
-        fg: PALETTE.text,
-        side: "left",
-      });
-      shortModel = `${shortModel}↗`;
-    } else {
-      segments.push({
-        icon: ICON.model,
-        text: shortModel,
-        bg: modelBg,
-        fg: modelFg,
-        side: "left",
-      });
-    }
+  // --- LEFT: git branch ---
+  const branch = typeof footerData?.getGitBranch === "function" ? footerData.getGitBranch() : null;
+  if (branch) {
+    left.push({ icon: ICON.branch, text: branch, bg: PALETTE.surface0, fg: PALETTE.green });
+  }
 
-    // Project / Directory
-    const project = ctx.project_dir
-      ? ctx.project_dir.split("/").pop()
-      : "~";
-    segments.push({
-      icon: ICON.dir,
-      text: project,
-      bg: PALETTE.surface0,
-      fg: PALETTE.text,
-      side: "left",
-    });
+  // --- LEFT: compression savings ---
+  const compSaved = compression.rtkTokensSaved || compression.headroomTokensSaved;
+  if (compSaved) {
+    left.push({ icon: ICON.compression, text: `▼${fmtTokens(compSaved)}`, bg: PALETTE.surface0, fg: PALETTE.sapphire });
+  }
 
-    // Git Branch
-    if (ctx.git_branch) {
-      segments.push({
-        icon: ICON.branch,
-        text: ctx.git_branch,
-        bg: PALETTE.surface0,
-        fg: PALETTE.green,
-        side: "left",
-      });
-    }
-
-    // Worktree
-    if (ctx.worktree && ctx.worktree !== ctx.git_branch) {
-      segments.push({
-        icon: ICON.worktree,
-        text: ctx.worktree,
-        bg: PALETTE.surface0,
-        fg: PALETTE.teal,
-        side: "left",
-      });
-    }
-
-    // PR Number
-    if (ctx.pr_number) {
-      segments.push({
-        icon: ICON.pr,
-        text: `#${ctx.pr_number}`,
-        bg: PALETTE.surface0,
-        fg: PALETTE.mauve,
-        side: "left",
-      });
-    }
-
-    // Compression savings
-    const compSaved =
-      this.compression.rtkTokensSaved ||
-      this.compression.headroomTokensSaved;
-    if (compSaved) {
-      segments.push({
-        icon: ICON.compression,
-        text: `▼${fmtTokens(compSaved)}`,
-        bg: PALETTE.surface0,
-        fg: PALETTE.sapphire,
-        side: "left",
-      });
-    }
-
-    // ====== RIGHT SIDE (fixed-width) ======
-
-    // Context % with color-coded bar
-    const ctxPct = ctx.context_pct || 0;
-    const ctxClr = contextColor(ctxPct);
-    segments.push({
+  // --- RIGHT: context % (color-coded bar) ---
+  const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+  if (usage && usage.percent != null) {
+    const pct = usage.percent;
+    right.push({
       icon: ICON.context,
-      text: `${contextBar(ctxPct)} ${ctxPct.toFixed(1)}%`,
-      bg: ctxClr,
+      text: `${contextBar(pct)} ${pct.toFixed(1)}%`,
+      bg: contextColor(pct),
       fg: PALETTE.bg,
-      side: "right",
-      minWidth: 20,
     });
+  }
 
-    // Token counts
-    const inputT = ctx.input_tokens || 0;
-    const outputT = ctx.output_tokens || 0;
-    const totalT = inputT + outputT;
-    const ctxSize = ctx.context_window_size || 200000;
-    segments.push({
-      icon: ICON.tokens,
-      text: `${fmtTokens(totalT)}/${fmtTokens(ctxSize)}`,
-      bg: PALETTE.surface1,
-      fg: PALETTE.text,
-      side: "right",
-      minWidth: 14,
-    });
+  // --- RIGHT: tokens / window ---
+  const { input, output, cost, cacheRead } = aggregateUsage(ctx);
+  const totalT = input + output;
+  const ctxSize = usage?.contextWindow || ctx.model?.contextWindow || 0;
+  if (totalT > 0) {
+    const winStr = ctxSize ? `/${fmtTokens(ctxSize)}` : "";
+    right.push({ icon: ICON.tokens, text: `${fmtTokens(totalT)}${winStr}`, bg: PALETTE.surface1, fg: PALETTE.text });
+  }
 
-    // Cache hit rate
-    const cacheRead = ctx.cache_read_tokens || 0;
-    const cachePct = inputT > 0 ? Math.round((cacheRead / inputT) * 100) : 0;
-    if (cachePct > 0) {
-      segments.push({
-        icon: ICON.cache,
-        text: `${cachePct}%`,
-        bg: PALETTE.surface1,
-        fg: PALETTE.sapphire,
-        side: "right",
-        minWidth: 7,
-      });
-    }
+  // --- RIGHT: cache hit rate (only if provider reports it) ---
+  if (cacheRead > 0 && input > 0) {
+    const cachePct = Math.round((cacheRead / input) * 100);
+    right.push({ icon: ICON.cache, text: `${cachePct}%`, bg: PALETTE.surface1, fg: PALETTE.sapphire });
+  }
 
-    // Cost
-    const cost = ctx.cost || 0;
-    segments.push({
-      icon: ICON.cost,
-      text: fmtCost(cost),
-      bg: PALETTE.surface0,
-      fg: PALETTE.yellow,
-      side: "right",
-      minWidth: 8,
-    });
+  // --- RIGHT: cost ---
+  if (cost > 0) {
+    right.push({ icon: ICON.cost, text: fmtCost(cost), bg: PALETTE.surface0, fg: PALETTE.yellow });
+  }
 
-    // Throughput
-    if (ctx.api_duration_ms > 0 && outputT > 0) {
-      const tps = Math.round((outputT * 1000) / ctx.api_duration_ms);
-      segments.push({
-        icon: ICON.speed,
-        text: `${tps}t/s`,
-        bg: PALETTE.surface0,
-        fg: PALETTE.subtext0,
-        side: "right",
-        minWidth: 8,
-      });
-    }
-
-    // ====== QUOTA SEGMENTS (v3.0) ======
-    // If proxy is swapping models, show DUAL quota:
-    //   Agent's perceived rate limits | Real provider quota
-    // If no proxy, show standard rate limits + external quota data
-
-    if (modelSwapped && this.quotaState) {
-      // DUAL QUOTA MODE
-      const agentRate5 = ctx.rate5_pct || 0;
-      const agentRate7 = ctx.rate7_pct || 0;
-
-      // Determine real provider quota
-      let realRate5 = agentRate5;
-      let realRate7 = agentRate7;
-      let realProvider = "unknown";
-
-      if (proxyInfo!.actual_model.match(/gpt|o4|o3/i)) {
-        realProvider = "openai";
-        realRate5 = this.quotaState.providers.openai?.["5h_used_pct"] ?? agentRate5;
-        realRate7 = this.quotaState.providers.openai?.["7d_used_pct"] ?? agentRate7;
-      } else if (proxyInfo!.actual_model.match(/gemini/i)) {
-        realProvider = "gemini";
-        realRate5 = this.quotaState.providers.gemini?.["daily_used_pct"] ?? agentRate5;
-        realRate7 = 0;
-      } else {
-        realProvider = "anthropic";
-        realRate5 = this.quotaState.providers.anthropic?.["5h_used_pct"] ?? agentRate5;
-        realRate7 = this.quotaState.providers.anthropic?.["7d_used_pct"] ?? agentRate7;
-      }
-
-      // Agent-facing quota segment
-      const quotaClr = quotaColor(Math.max(agentRate5, realRate5));
-      segments.push({
-        icon: ICON.quota,
-        text: `5h${agentRate5}%/7d${agentRate7}%|${realProvider}:5h${realRate5}%/7d${realRate7}%`,
-        bg: quotaClr,
-        fg: PALETTE.bg,
-        side: "right",
-        minWidth: 20,
-      });
-    } else {
-      // STANDARD MODE: Agent's own rate limits
-      if (ctx.rate5_pct > 0) {
-        const rate5Clr = quotaColor(ctx.rate5_pct);
-        segments.push({
-          icon: ICON.rate,
-          text: `5h${ctx.rate5_pct}%`,
-          bg: ctx.rate5_pct >= 80 ? PALETTE.peach : PALETTE.surface0,
-          fg: ctx.rate5_pct >= 80 ? PALETTE.bg : PALETTE.subtext0,
-          side: "right",
-          minWidth: 8,
-        });
-      }
-      if (ctx.rate7_pct > 0) {
-        segments.push({
-          icon: ICON.rate,
-          text: `7d${ctx.rate7_pct}%`,
-          bg: ctx.rate7_pct >= 80 ? PALETTE.peach : PALETTE.surface0,
-          fg: ctx.rate7_pct >= 80 ? PALETTE.bg : PALETTE.subtext0,
-          side: "right",
-          minWidth: 8,
+  // --- RIGHT: provider quota (from external quota daemon file) ---
+  if (quotaState?.providers) {
+    for (const [name, q] of Object.entries(quotaState.providers)) {
+      const used = q["5h_used_pct"] ?? q["daily_used_pct"];
+      if (used != null) {
+        right.push({
+          icon: ICON.quota,
+          text: `${name[0].toUpperCase()}:5h${Math.round(used)}%`,
+          bg: quotaColor(used),
+          fg: PALETTE.bg,
         });
       }
     }
-
-    // Budget remaining (from LiteLLM / onWatch)
-    if (this.quotaState) {
-      const providers = this.quotaState.providers;
-      const budgetParts: string[] = [];
-
-      if (providers.anthropic?.budget_remaining_usd !== undefined && providers.anthropic.budget_remaining_usd > 0) {
-        budgetParts.push(`A:$${providers.anthropic.budget_remaining_usd.toFixed(2)}`);
-      }
-      if (providers.openai?.budget_remaining_usd !== undefined && providers.openai.budget_remaining_usd > 0) {
-        budgetParts.push(`O:$${providers.openai.budget_remaining_usd.toFixed(2)}`);
-      }
-
-      if (budgetParts.length > 0) {
-        segments.push({
-          icon: ICON.cost,
-          text: budgetParts.join(" "),
-          bg: PALETTE.surface0,
-          fg: PALETTE.green,
-          side: "right",
-          minWidth: 12,
-        });
+    // budget remaining (USD)
+    const budgetParts: string[] = [];
+    for (const [name, q] of Object.entries(quotaState.providers)) {
+      if (q.budget_remaining_usd != null && q.budget_remaining_usd > 0) {
+        budgetParts.push(`${name[0].toUpperCase()}:$${q.budget_remaining_usd.toFixed(2)}`);
       }
     }
-
-    // Duration
-    segments.push({
-      icon: ICON.duration,
-      text: fmtDuration(ctx.duration_ms || 0),
-      bg: PALETTE.surface1,
-      fg: PALETTE.text,
-      side: "right",
-      minWidth: 6,
-    });
-
-    // Effort level
-    const effort = ctx.effort_level;
-    if (effort) {
-      const effortIcon =
-        effort === "max" || effort === "xhigh"
-          ? "⚡"
-          : effort === "high"
-          ? "▲"
-          : effort === "medium"
-          ? "●"
-          : "▼";
-      segments.push({
-        icon: ICON.effort,
-        text: effortIcon,
-        bg: PALETTE.surface0,
-        fg: PALETTE.mauve,
-        side: "right",
-        minWidth: 3,
-      });
+    if (budgetParts.length) {
+      right.push({ icon: ICON.cost, text: budgetParts.join(" "), bg: PALETTE.surface0, fg: PALETTE.green });
     }
-
-    // Thinking mode
-    if (ctx.thinking_enabled) {
-      segments.push({
-        icon: ICON.think,
-        text: "✦",
-        bg: PALETTE.surface0,
-        fg: PALETTE.lavender,
-        side: "right",
-        minWidth: 3,
-      });
-    }
-
-    // Background tasks count
-    const bgTasks = ctx.bg_tasks || parseInt(process.env.PI_BG_TASKS || "0");
-    if (bgTasks > 0) {
-      segments.push({
-        icon: ICON.bgTasks,
-        text: `${bgTasks}`,
-        bg: PALETTE.surface0,
-        fg: PALETTE.teal,
-        side: "right",
-        minWidth: 3,
-      });
-    }
-
-    // Permission level
-    const permLevel = this.detectPermission();
-    if (permLevel === "yolo") {
-      segments.push({
-        icon: ICON.perm,
-        text: "Y",
-        bg: PALETTE.red,
-        fg: PALETTE.bg,
-        side: "right",
-        minWidth: 3,
-      });
-    } else if (permLevel === "auto") {
-      segments.push({
-        icon: ICON.perm,
-        text: "A",
-        bg: PALETTE.yellow,
-        fg: PALETTE.bg,
-        side: "right",
-        minWidth: 3,
-      });
-    }
-
-    return segments;
   }
 
-  /** Detect permission level from environment */
-  private detectPermission(): "yolo" | "auto" | "ask" {
-    if (process.env.HERMES_YOLO_MODE === "1" || process.env.PI_YOLO === "1") return "yolo";
-    if (process.env.PI_AUTO_ACCEPT === "1") return "auto";
-    return "ask";
+  // --- RIGHT: quota warnings ---
+  if (quotaState?.warnings?.length) {
+    right.push({ icon: ICON.warn, text: `${quotaState.warnings.length}`, bg: PALETTE.red, fg: PALETTE.bg });
   }
 
-  /** Update compression metrics from headroom/RTK */
-  updateCompression(metrics: CompressionMetrics): void {
-    this.compression = { ...this.compression, ...metrics };
+  // --- compose with adaptive truncation ---
+  const leftStr = renderLeft(left);
+  let rightStr = renderRight(right);
+
+  const lw = visibleWidth(leftStr);
+  let rw = visibleWidth(rightStr);
+
+  // If too wide, drop right segments from the left end (least critical first kept last)
+  while (lw + rw > width && right.length > 0) {
+    right.shift();
+    rightStr = renderRight(right);
+    rw = visibleWidth(rightStr);
   }
 
-  /** Called when extension is loaded */
-  onActivate(): void {
-    // Watch for RTK metrics file
-    const rtkFile = process.env.RTK_METRICS_FILE || "/tmp/rtk-metrics.json";
+  const padCount = Math.max(1, width - lw - rw);
+  const line = leftStr + " ".repeat(padCount) + rightStr;
 
-    // Poll headroom proxy endpoint
-    const headroomUrl = process.env.HEADROOM_ENDPOINT || "";
+  // Hard cap (never overflow the terminal width)
+  if (visibleWidth(line) <= width) return line;
+  // Fall back to left side only if even that overflows
+  return lw <= width ? leftStr : leftStr; // renderer keeps segments atomic; TUI clips remainder
+}
+
+// ---------------------------------------------------------------------------
+//  Extension entry point
+// ---------------------------------------------------------------------------
+export default function hyperstatus(pi: ExtensionAPI) {
+  let quotaState: QuotaState | null = null;
+  const compression: CompressionMetrics = {};
+  let requestRender: (() => void) | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function refresh(): Promise<void> {
+    const q = await readJson(QUOTA_FILE);
+    quotaState = q?.summary ?? q ?? null;
+
+    const rtk = await readJson(RTK_FILE);
+    if (rtk) {
+      if (typeof rtk.tokens_saved === "number") compression.rtkTokensSaved = rtk.tokens_saved;
+    }
+
+    const headroomUrl = process.env.HEADROOM_ENDPOINT;
     if (headroomUrl) {
-      setInterval(async () => {
-        try {
-          const resp = await fetch(`${headroomUrl}/metrics`);
-          const data = await resp.json();
-          this.updateCompression({
-            headroomTokensSaved: data.tokens_saved,
-            headroomRatio: data.compression_ratio,
-          });
-        } catch {
-          // Silently fail if proxy unavailable
-        }
-      }, 5000);
+      try {
+        const resp = await fetch(`${headroomUrl}/metrics`);
+        const data: any = await resp.json();
+        if (typeof data.tokens_saved === "number") compression.headroomTokensSaved = data.tokens_saved;
+      } catch {
+        /* proxy unavailable */
+      }
+    }
+    requestRender?.();
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (!ctx.hasUI) return;
+
+    await refresh();
+    if (!pollTimer) {
+      pollTimer = setInterval(() => {
+        void refresh();
+      }, 15000);
+      // don't keep the process alive solely for the status poller
+      (pollTimer as any).unref?.();
     }
 
-    // Poll quota state file (updated by quota-fetch.sh daemon)
-    setInterval(async () => {
-      await this.readQuotaState();
-    }, 30000);  // Every 30 seconds
-  }
+    ctx.ui.setFooter((tui: any, _theme: any, footerData: any) => {
+      requestRender = () => tui.requestRender?.();
+      const unsub =
+        typeof footerData?.onBranchChange === "function"
+          ? footerData.onBranchChange(() => tui.requestRender?.())
+          : undefined;
+      return {
+        dispose() {
+          if (typeof unsub === "function") unsub();
+          if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+          }
+          requestRender = null;
+        },
+        invalidate() {},
+        render(width: number): string[] {
+          return [buildLine(ctx, footerData, width, quotaState, compression)];
+        },
+      };
+    });
+  });
 }
