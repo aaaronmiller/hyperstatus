@@ -402,11 +402,11 @@ if [ "$PROXY_MODEL_SWAPPED" = "True" ] || [ "$PROXY_MODEL_SWAPPED" = "true" ]; t
 
   # Show: 󰜦 agent:5h42%7d28%|real:5h67%7d45%
   SEG_QUOTA_PARTS="${IC_QUOTA}"
-  if [ -n "$AGENT_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=" 5h${AGENT_RATE5_FMT}%%"; fi
-  if [ -n "$AGENT_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${AGENT_RATE7_FMT}%%"; fi
+  if [ -n "$AGENT_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=" 5h${AGENT_RATE5_FMT}%"; fi
+  if [ -n "$AGENT_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${AGENT_RATE7_FMT}%"; fi
   SEG_QUOTA_PARTS+="|${QUOTA_PROVIDER}"
-  if [ -n "$REAL_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=":5h${REAL_RATE5_FMT}%%"; fi
-  if [ -n "$REAL_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${REAL_RATE7_FMT}%%"; fi
+  if [ -n "$REAL_RATE5_FMT" ]; then SEG_QUOTA_PARTS+=":5h${REAL_RATE5_FMT}%"; fi
+  if [ -n "$REAL_RATE7_FMT" ]; then SEG_QUOTA_PARTS+="/7d${REAL_RATE7_FMT}%"; fi
   SEG_QUOTA=" ${SEG_QUOTA_PARTS}"
 else
   # No proxy — show agent's own rate limits (standard behavior)
@@ -495,7 +495,7 @@ LEFT_PART="${SEG_MODEL}${SEG_PROXY} │ ${SEG_PROJECT}${SEG_GIT}${SEG_WORKTREE}$
 # --- RIGHT SEGMENTS (fixed width) ---
 # Context with color
 CTX_PCT_FMT=$(printf "%5.1f" "${CTX_PCT:-0}")
-SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%%"
+SEG_CTX="${IC_CTX} ${BAR} ${CTX_PCT_FMT}%"
 
 # Tokens
 TOTAL_FMT=$(fmt_tokens "${TOTAL_TOKENS:-0}")
@@ -504,7 +504,7 @@ SEG_TOKENS="${IC_TOKEN} ${TOTAL_FMT}/${CTX_SIZE_FMT}"
 
 # Cache
 CACHE_PCT_FMT=$(printf "%3d" "${CACHE_PCT:-0}")
-SEG_CACHE="${IC_CACHE} ${CACHE_PCT_FMT}%%"
+SEG_CACHE="${IC_CACHE} ${CACHE_PCT_FMT}%"
 
 # Cost
 COST_FMT=$(fmt_cost "${TOTAL_COST:-0}")
@@ -527,11 +527,11 @@ else
   # DIRECT MODE: Standard rate limit segments with threshold coloring
   SEG_RATE5=""
   if [ -n "$RATE5_FMT" ]; then
-    SEG_RATE5="${IC_RATE5}5h${RATE5_FMT}%%"
+    SEG_RATE5="${IC_RATE5}5h${RATE5_FMT}%"
   fi
   SEG_RATE7=""
   if [ -n "$RATE7_FMT" ]; then
-    SEG_RATE7="${IC_RATE7}7d${RATE7_FMT}%%"
+    SEG_RATE7="${IC_RATE7}7d${RATE7_FMT}%"
   fi
 fi
 
