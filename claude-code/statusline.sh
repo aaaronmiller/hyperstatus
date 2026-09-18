@@ -18,6 +18,39 @@ set -euo pipefail
 # --- Read JSON input from stdin ---
 INPUT=$(cat)
 
+# --- Single-pass JSON flatten (perf, 2026-09-18) ---------------------------
+# jval/quota_val used to spawn one python3 per field: 33 + 17 = 50 processes,
+# ~65ms each, ~3.4s total. Claude Code renders nothing when the statusLine
+# command is that slow. Both JSON documents are now flattened to dotted keys
+# in ONE python3 call and looked up from associative arrays instead.
+declare -A _J _Q
+_hs_flatten() {
+  python3 -c '
+import json, sys, shlex
+def walk(v, p, out):
+    if isinstance(v, dict):
+        for k, sub in v.items():
+            walk(sub, p + [str(k)], out)
+    elif isinstance(v, list):
+        for i, sub in enumerate(v):
+            walk(sub, p + [str(i)], out)
+    else:
+        out[".".join(p)] = "" if v is None else str(v)
+src, arr = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(src)) if src != "-" else json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+out = {}
+walk(d, [], out)
+for k, v in out.items():
+    print("%s[%s]=%s" % (arr, shlex.quote(k), shlex.quote(v)))
+' "$1" "$2" 2>/dev/null
+}
+eval "$(printf '%s' "$INPUT" | _hs_flatten - _J)"
+[ -f /tmp/hyperstatus-quota.json ] && eval "$(_hs_flatten /tmp/hyperstatus-quota.json _Q)"
+# ---------------------------------------------------------------------------
+
 # --- Color Palette (Catppuccin Mocha-inspired + status semantics) ---
 C_BG='\033[48;5;30m'        # Deep teal background
 C_BG2='\033[48;5;24m'       # Darker teal for secondary segments
@@ -72,26 +105,9 @@ IC_PROXY='\uf6ff'       #  Proxy/swap icon
 IC_PROVIDER='\uf1c0'    #  Database/provider icon
 IC_WARN='\uf071'        #  Warning triangle
 
-# --- Helper: JSON value extraction ---
+# --- Helper: JSON value extraction (array lookup, see _hs_flatten above) ---
 jval() {
-  echo "$INPUT" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-keys = '$1'.split('.')
-v = d
-for k in keys:
-  if isinstance(v, dict) and k in v:
-    v = v[k]
-  elif isinstance(v, list) and k.isdigit():
-    v = v[int(k)]
-  else:
-    v = None
-    break
-if v is None:
-  print('')
-else:
-  print(str(v))
-" 2>/dev/null || echo ""
+  printf '%s' "${_J[$1]-}"
 }
 
 # --- Helper: Context color based on percentage ---
@@ -167,32 +183,10 @@ fmt_cost() {
   printf "\$%.2f" "$c"
 }
 
-# --- Helper: Read quota state from shared JSON ---
+# --- Helper: Read quota state from shared JSON (array lookup) ---
 quota_val() {
-  local key="$1"
-  local default="${2:-0}"
-  if [ -f /tmp/hyperstatus-quota.json ]; then
-    python3 -c "
-import json
-try:
-    with open('/tmp/hyperstatus-quota.json') as f:
-        d = json.load(f)
-    # Navigate dotted key path
-    keys = '$key'.split('.')
-    v = d
-    for k in keys:
-        if isinstance(v, dict) and k in v:
-            v = v[k]
-        else:
-            v = '$default'
-            break
-    print(v)
-except:
-    print('$default')
-" 2>/dev/null || echo "$default"
-  else
-    echo "$default"
-  fi
+  local key="$1" default="${2:-0}" v="${_Q[$1]-}"
+  if [ -z "$v" ]; then printf '%s' "$default"; else printf '%s' "$v"; fi
 }
 
 # ==============================================================================
@@ -591,8 +585,58 @@ else
 fi
 
 # --- RENDER WITH POWERLINE SEGMENTS ---
-# Line 1: Powerline bar with colored segments
-echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG} ${RIGHT_PART} ${C_RESET}"
+# Line 1: Powerline bar, LEFT flush-left / RIGHT flush-right (2026-09-18).
+#
+# Previously LEFT_PART and RIGHT_PART were simply concatenated, so every metric
+# shifted horizontally whenever the cwd or model name changed length -- the
+# whole bar "bounced" on each render. Now the gap between them is padded so the
+# right-hand metrics sit at fixed columns and only the left side grows.
+
+# Visible length. Two things must be discounted, and missing either one skews
+# the padding:
+#   1. ANSI CSI colour escapes, which occupy no columns.
+#   2. The IC_* icon variables, which still hold the LITERAL six characters
+#       at this point -- `echo -e` only collapses them to one glyph at
+#      render time. Counting them raw over-reports the width by 5 per icon.
+shopt -s extglob
+_hs_vislen() {
+  local s=$1
+  s=${s//\\u+([0-9a-fA-F])/X}          # each \uXXXX icon renders as 1 column
+  s=${s//$'\033'\[*([0-9;])m/}         # drop colour escapes
+  s=${s//$'\033'\[*([0-9;])[A-Za-z]/}  # drop any other CSI
+  printf '%s' "${#s}"
+}
+
+# Terminal width: Claude Code does not pass one, so prefer COLUMNS, fall back to
+# tput only when a TTY exists, else a conservative default.
+_hs_cols=${COLUMNS:-0}
+if [ "${_hs_cols:-0}" -lt 20 ] && [ -t 1 ]; then _hs_cols=$(tput cols 2>/dev/null || echo 0); fi
+[ "${_hs_cols:-0}" -lt 20 ] && _hs_cols=${HYPERSTATUS_COLS:-120}
+
+_hs_l=$(_hs_vislen "$LEFT_PART")
+_hs_r=$(_hs_vislen "$RIGHT_PART")
+
+# Narrow terminal: the right-hand metrics are fixed-width and must stay put, so
+# the variable-width left side is what gives. Without this the line overflows
+# and wraps, which looks far worse than an ellipsis.
+_hs_avail=$(( _hs_cols - _hs_r - 6 ))
+if [ "$_hs_avail" -ge 8 ] && [ "$_hs_l" -gt "$_hs_avail" ]; then
+  # Trim raw characters until the *visible* length fits, so colour escapes and
+  # \uXXXX icons are not counted against the budget.
+  while [ "${#LEFT_PART}" -gt 0 ] && [ "$(_hs_vislen "$LEFT_PART")" -gt "$_hs_avail" ]; do
+    LEFT_PART=${LEFT_PART%?}
+  done
+  LEFT_PART="${LEFT_PART%?}…"
+  _hs_l=$(_hs_vislen "$LEFT_PART")
+fi
+# 5 = leading space + trailing space around LEFT, the separator glyph, and the
+# space + trailing space around RIGHT. Verified empirically: with COLUMNS=150
+# this lands the rendered line at exactly 150 columns, so it never wraps.
+_hs_gap=$(( _hs_cols - _hs_l - _hs_r - 5 ))
+[ "$_hs_gap" -lt 1 ] && _hs_gap=1
+printf -v _hs_fill '%*s' "$_hs_gap" ''
+
+echo -e "${C_BG}${C_FG_BRIGHT} ${LEFT_PART} ${C_FG_DIM}${PL_RIGHT_THIN}${C_BG2}${C_FG}${_hs_fill} ${RIGHT_PART} ${C_RESET}"
 
 # Line 2: Context detail bar (if context > 50%)
 if (( $(echo "${CTX_PCT:-0} >= 50" | bc -l) )); then
