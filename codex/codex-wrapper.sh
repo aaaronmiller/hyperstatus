@@ -15,7 +15,7 @@ set -euo pipefail
 SESSION_NAME="codex-hyperstatus-$$"
 
 # Resolve home
-HOME_DIR="${HOME:-~}"
+HOME_DIR="$HOME"
 
 # --- Read quota state from shared JSON ---
 quota_val() {

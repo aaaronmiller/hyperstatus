@@ -51,7 +51,7 @@ if curl -s "http://localhost:${HEADROOM_PORT}/metrics" > /dev/null 2>&1; then
 fi
 # Auto-detect quota tools
 if command -v ccusage &>/dev/null; then QUOTA_ENABLED=true; fi
-if [ -f "${HOME:-~}/.onwatch/data/onwatch.db" ]; then QUOTA_ENABLED=true; fi
+if [ -f "$HOME/.onwatch/data/onwatch.db" ]; then QUOTA_ENABLED=true; fi
 if [ -n "${LITELLM_ENDPOINT:-}" ] || [ -n "${LLM_KEY_PROXY_ENDPOINT:-}" ]; then QUOTA_ENABLED=true; fi
 
 echo "HYPERSTATUS Metrics & Quota Collector v3.0"
