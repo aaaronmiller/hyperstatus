@@ -13,7 +13,7 @@
 
 # Resolve home directory
 if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
-  HOME_DIR="/home/chetaz"
+  HOME_DIR="$HOME"
 else
   HOME_DIR="$HOME"
 fi

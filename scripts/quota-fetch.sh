@@ -42,7 +42,7 @@ CCUSAGE_EXTRA_ARGS="${CCUSAGE_ARGS:-}"
 
 # Resolve home
 if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
-  HOME_DIR="/home/chetaz"
+  HOME_DIR="$HOME"
 else
   HOME_DIR="$HOME"
 fi

@@ -739,7 +739,7 @@ def build_document():
     codex_mockup = """
     Codex CLI built-in status bar (single line, limited customization):
     
-    [o4-mini+reasoning] | [/home/chetaz/project] | [main] | [██░░ 23%] | [77%] | [200K] | [49.3K] | [2.1K] | [5h:23%] | [7d:8%]
+    [o4-mini+reasoning] | [~/project] | [main] | [██░░ 23%] | [77%] | [200K] | [49.3K] | [2.1K] | [5h:23%] | [7d:8%]
       model+effort        directory              branch    ctx-used   remain   size    tokens   output    5h-limit   7d-limit
     
     Note: Codex does not support shell scripts, Nerd Font icons, or custom colors.
